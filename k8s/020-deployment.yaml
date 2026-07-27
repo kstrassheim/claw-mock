@@ -2,6 +2,12 @@
 # ServiceAccount + Role + RoleBinding so the render-config init container
 # can patch the claw-mock-config ConfigMap at pod start. Scoped tightly:
 # only the claw-mock-config ConfigMap in this namespace, get/patch/update.
+#
+# The deploy pipeline annotates this SA with
+# `azure.workload.identity/client-id: <deploy-claw-mock-dev client id>`
+# (value from the terraform `deploy_identity_client_id` output). Together
+# with the pod label `azure.workload.identity/use: "true"` below, that
+# gives the pod an Entra token for Azure SQL — no SQL password exists.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -57,6 +63,11 @@ spec:
     metadata:
       labels:
         app: claw-mock
+        # Azure Workload Identity webhook: inject AZURE_CLIENT_ID /
+        # AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE into the pod so
+        # sqlcmd -G --authentication-method=ActiveDirectoryDefault can
+        # reach the Entra-only SQL server.
+        azure.workload.identity/use: "true"
     spec:
       serviceAccountName: claw-mock
       # PVC mounts default to root:root. The openclaw container runs as
@@ -138,8 +149,8 @@ spec:
             - secretRef:
                 name: claw-mock-secrets
             # SQL connection info, created by Terraform
-            # (SQL_SERVER_FQDN, SQL_BOT_USER, SQL_BOT_PASSWORD,
-            # SQL_DB_ADVENTUREWORKS, SQL_DB_NORTHWIND).
+            # (SQL_SERVER_FQDN, SQL_DB_ADVENTUREWORKS, SQL_DB_NORTHWIND —
+            # no credentials: auth is Entra workload identity).
             - secretRef:
                 name: claw-mock-db
           volumeMounts:
