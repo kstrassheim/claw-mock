@@ -4,10 +4,15 @@ An fully automated live database mocker.
 
 An openclaw bot runs in AKS and, once an hour, writes plausible new rows into
 two Azure SQL databases (AdventureWorks and Northwind) so they look like live
-systems rather than static samples. What it writes is governed by a mocking
-manual per database, which classifies every table as fact or dimension and sets
-the timing rules. After each run the bot reports the row counts it created,
-grouped by database and by fact/dimension.
+systems rather than static samples. It inserts new rows, updates existing
+ones (order status, stock, prices, contact data), and trims old rows so
+every table stays inside its size band — dimension rows are only deleted
+when nothing references them. A few rows per run deliberately carry edge
+cases (max-length strings, unicode, numeric extremes) so DWH import jobs
+are tested against column limits. What it writes is governed by a mocking
+manual per database, which classifies every table as fact or dimension and
+sets the timing rules. After each run the bot reports the rows it
+inserted, updated and deleted, grouped by database and by fact/dimension.
 
 ## Prerequisites
 

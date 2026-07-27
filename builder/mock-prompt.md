@@ -11,9 +11,11 @@ Today it holds `MOCK-AdventureWorks.md` and `MOCK-Northwind.md`.
 
 Each manual states its target server, database and **engine**, which
 tables are FACTS and which are DIMENSIONS, how many rows to create per
-run, the live-timing rules (timestamps inside the last ~65 minutes), and
-the integrity rules. The engine matters: not every database is
-Azure SQL/mssql, so use the client `TOOLS.md` lists for that engine.
+run, the size band every table must stay in, the update and delete
+rules, the edge-case catalogue, the live-timing rules (timestamps
+inside the last ~65 minutes), and the integrity rules. The engine
+matters: not every database is Azure SQL/mssql, so use the client
+`TOOLS.md` lists for that engine.
 
 ## How to connect
 
@@ -30,10 +32,31 @@ your pod; no password exists anywhere.
 - Before writing, inspect the current schema/state (row counts, max
   OrderDate) so your mock run continues the existing story instead of
   colliding with it.
-- Follow the manuals' fact/dimension classification exactly. Facts are
-  append-only. Dimensions move slowly; static reference tables are
-  never touched.
-- Keep FK integrity: insert parents before children.
+- Follow the manuals' fact/dimension classification exactly. Static
+  reference tables are never inserted, updated or deleted.
+- Keep FK integrity: insert parents before children; delete children
+  before parents.
+- **Inserts:** append the new fact rows and occasional dimension rows
+  the manual prescribes.
+- **Updates:** apply the manual's drift rules (order status, stock,
+  prices, contact data). Keep the per-run update counts small and set
+  `ModifiedDate` where the table has one.
+- **Deletes / size bands:** every manual defines a min–max row band
+  per table. At the END of a run, if a table is above its max, trim
+  the oldest rows down to the max — facts oldest-first by their date
+  column, child tables before their parents (details before orders).
+  Dimension rows may only be deleted when NOTHING references them
+  (check every FK that can point at them, directly or transitively)
+  and they were not created in this run. Never trim a table below its
+  min band.
+- **Edge cases:** these databases feed a DWH import that must be
+  tested against column limits. On 0–2 of the rows you insert or
+  update per run per database, use a value from the manual's
+  edge-case catalogue (max-length strings, unicode, apostrophes,
+  numeric extremes, NULLs). Rotate through the catalogue over runs.
+  Hard limits: never violate PK/FK/NOT NULL/CHECK constraints, never
+  put edge values into FK columns, and keep computed columns
+  consistent (e.g. `LineTotal`).
 - Batch your SQL sensibly (a few sqlcmd invocations per database, not
   one per row).
 - If a database is unreachable or a statement fails, do NOT silently
@@ -42,27 +65,31 @@ your pod; no password exists anywhere.
 ## Final message (this is what gets delivered to the user)
 
 Your final reply IS the run report. Format it exactly like this, one
-section per database, grouped by fact/dimension, with the number of
-rows you created **in this run** per table:
+section per database, grouped by fact/dimension. Per table, report
+what happened **in this run** using `+inserted ~updated -deleted`;
+omit any part that is zero:
 
 ```
 Mock run 2026-07-27 18:00 UTC ✅
 AdventureWorks
   fact
-    Sales.SalesOrderHeader: +7
-    Sales.SalesOrderDetail: +21
+    Sales.SalesOrderHeader: +7 ~2
+    Sales.SalesOrderDetail: +21 -15
   dimension
-    Sales.Customer: +1
-    Person.Person: +1
+    Sales.Customer: +1 ~1
+    Person.Person: +1 ~1
+    Production.Product: ~2
 Northwind
   fact
-    Orders: +5
-    Order Details: +12
+    Orders: +5 ~2
+    Order Details: +12 -9
   dimension
-    (no dimension changes)
+    Products: ~8
 ```
 
-Omit tables with zero new rows. If a database failed, replace its
+Count every row you UPDATEd in `~` — status advances, shipments,
+stock moves, price drift, contact changes all count. Omit tables
+where nothing happened. If a database failed, replace its
 section with:
 
 ```

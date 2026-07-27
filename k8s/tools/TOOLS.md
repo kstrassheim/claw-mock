@@ -83,7 +83,8 @@ database, named `MOCK-<database>.md`:
 
 Each manual carries only what is specific to that database: its target
 server/database/engine, the fact/dimension table classification, the
-per-table mock behaviour and the live-timing rules. Connecting is
+per-table mock behaviour, the size bands, the update/delete and
+edge-case rules, and the live-timing rules. Connecting is
 described above; the report format is in the run prompt. Read every
 `MOCK-*.md` present at the start of a run — do not assume the list above
 is complete, since databases may be added.
@@ -91,6 +92,6 @@ is complete, since databases may be added.
 The hourly run itself is driven by the `db-mocker` CronJob — control it
 via the `mocker` skill (`mocker status|start|stop|run|logs`).
 
-After every mock run, report the number of rows you created, grouped by
-database → fact/dimension → table, or the failure with the exact SQL
-error message.
+After every mock run, report the number of rows you inserted, updated
+and deleted, grouped by database → fact/dimension → table, or the
+failure with the exact SQL error message.
