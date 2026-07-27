@@ -319,10 +319,35 @@ jobs:
             echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
             exit 1
           fi
+
+          # Gateway auth token. The config binds the gateway to "lan" and
+          # openclaw refuses to start without auth:
+          #   "Refusing to bind gateway to lan without auth."
+          # render-config.sh only carries gateway.auth forward from an existing
+          # config on the PVC, so on a fresh volume there is nothing to carry
+          # and the pod crash-loops. It is not a GitHub environment secret
+          # either, so mint one here and then keep reusing it — regenerating on
+          # every deploy would invalidate any paired control-UI session.
+          GATEWAY_TOKEN=$(kubectl get secret claw-mock-secrets -n claw-mock \
+            -o jsonpath='{.data.OPENCLAW_GATEWAY_TOKEN}' 2>/dev/null | base64 -d || true)
+          if [ -z "$GATEWAY_TOKEN" ]; then
+            GATEWAY_TOKEN=$(openssl rand -hex 32)
+            echo "Minted a new gateway auth token"
+          else
+            echo "Reusing the existing gateway auth token"
+          fi
+
+          # ENTRA_* are deliberately not copied. They exist in the dev
+          # environment because claw-code's tester signs into Entra-protected
+          # sites with them, but claw-mock has no tester and no browser, and
+          # nothing in this repo reads them. Database access is workload
+          # identity end to end — see TOOLS.md: "there is no SQL user and no
+          # password anywhere".
           kubectl create secret generic claw-mock-secrets \
             --namespace claw-mock \
             --from-literal=MINIMAX_API_KEY="$MINIMAX_API_KEY" \
             --from-literal=TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
+            --from-literal=OPENCLAW_GATEWAY_TOKEN="$GATEWAY_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Azure logout
