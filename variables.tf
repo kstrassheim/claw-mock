@@ -11,13 +11,31 @@ variable "cluster_name" {
 }
 
 variable "location" {
-  description = "Azure region"
-  default     = "northeurope"
+  description = <<-EOT
+    Azure region for every resource in this project. AKS and Azure SQL are
+    deliberately kept in the same region — splitting them bills cross-region
+    egress on every query the mock bot runs.
+
+    History: switzerlandnorth could not provision the AKS node size
+    (VMSizeNotSupported); northeurope could not provision Azure SQL at all
+    ("ProvisioningDisabled: Provisioning is restricted in this region").
+    westeurope serves both — Standard_D2pds_v5 is offered there, and the
+    subscription already runs a SQL server in the region.
+  EOT
+  default     = "westeurope"
   type        = string
 }
 
 variable "node_size" {
-  description = "VM size for AKS node pool. Default is arm64 (Standard_D2pds_v5, 2 vCPU / 8 GiB) — matches the openclaw image build target (linux/arm64)."
+  description = <<-EOT
+    VM size for the AKS node pool. Standard_D2pds_v5 is arm64 (2 vCPU / 8 GiB)
+    and must stay arm64: deploy.yml builds the image for linux/arm64 only, so
+    an x86 node size would leave the bot pod unschedulable with an
+    exec-format/no-matching-manifest error. Verified available in westeurope.
+
+    To move to x86, change this AND the `platforms:` value in deploy.yml
+    together — they are one decision, not two.
+  EOT
   default     = "Standard_D2pds_v5"
   type        = string
 }
