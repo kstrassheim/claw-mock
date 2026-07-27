@@ -187,6 +187,7 @@ jobs:
     needs: dacpac-build
     runs-on: ubuntu-latest
     environment: dev
+    timeout-minutes: 20
 
     services:
       docker:
@@ -230,6 +231,20 @@ jobs:
           done
           docker info >/dev/null
 
+      - name: Pull SQL Server image (with retries)
+        # dind starts with an empty image store every run; MCR pulls can
+        # flake, so retry instead of letting one transient error kill the job.
+        run: |
+          ok=false
+          for i in 1 2 3; do
+            if docker pull mcr.microsoft.com/mssql/server:2022-latest; then
+              ok=true; break
+            fi
+            echo "::warning::docker pull attempt $i failed — retrying"
+            sleep 5
+          done
+          [ "$ok" = true ] || { echo "::error::could not pull mssql image after 3 attempts"; exit 1; }
+
       - name: Start ephemeral SQL Server
         run: |
           docker run -d --name mssql \
@@ -237,25 +252,53 @@ jobs:
             -e MSSQL_SA_PASSWORD="$SA_PASSWORD" \
             -p 1433:1433 \
             mcr.microsoft.com/mssql/server:2022-latest
+          docker ps -a
 
       - name: Wait for SQL Server to accept connections
+        # Readiness signal = "Recovery is complete" in the server log AND
+        # TCP 1433 reachable from the runner — the same path sqlpackage
+        # uses (runner -> dind port mapping -> container). This is
+        # deliberately NOT `docker exec ... sqlcmd`: the bundled sqlcmd's
+        # path/presence varies between mssql image revisions, which made
+        # the previous loop fail even when the server was healthy.
         run: |
-          for i in $(seq 1 60); do
-            if docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
-                 -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 5 \
-                 -Q "SELECT 1" >/dev/null 2>&1; then
-              echo "SQL Server is up"
+          for i in $(seq 1 90); do
+            status=$(docker inspect -f '{{.State.Status}}' mssql 2>/dev/null || echo "missing")
+            if [ "$status" = "exited" ] || [ "$status" = "dead" ] || [ "$status" = "missing" ]; then
+              echo "::error::SQL Server container is $status — cannot recover"
+              docker logs mssql 2>&1 | tail -80
+              exit 1
+            fi
+            if docker logs mssql 2>&1 | grep -q "Recovery is complete" \
+               && (exec 3<>/dev/tcp/127.0.0.1/1433) 2>/dev/null; then
+              echo "SQL Server is up (recovery complete, port 1433 reachable from runner)"
               exit 0
             fi
-            sleep 3
+            sleep 4
           done
           echo "::error::SQL Server did not come up in time"
-          docker logs mssql | tail -50
+          docker ps -a
+          docker logs mssql 2>&1 | tail -80
+          exit 1
+
+      - name: Locate sqlcmd inside the container
+        # mssql image revisions have shipped sqlcmd at different paths;
+        # discover it once and reuse via $SQLCMD.
+        run: |
+          for p in /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd; do
+            if docker exec mssql test -x "$p"; then
+              echo "SQLCMD=$p" >> $GITHUB_ENV
+              echo "sqlcmd found at $p"
+              exit 0
+            fi
+          done
+          echo "::error::sqlcmd not found in the mssql container"
+          docker exec mssql ls -R /opt 2>/dev/null | head -40 || true
           exit 1
 
       - name: Create empty target databases
         run: |
-          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+          docker exec mssql "$SQLCMD" \
             -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 \
             -Q "CREATE DATABASE [AdventureWorks]; CREATE DATABASE [Northwind];"
 
@@ -277,7 +320,7 @@ jobs:
 
       - name: Verify seed data (AdventureWorks)
         run: |
-          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+          docker exec mssql "$SQLCMD" \
             -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
             -d AdventureWorks -Q "
               SET NOCOUNT ON;
@@ -286,7 +329,7 @@ jobs:
 
       - name: Verify seed data (Northwind)
         run: |
-          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+          docker exec mssql "$SQLCMD" \
             -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
             -d Northwind -Q "
               SET NOCOUNT ON;
