@@ -7,8 +7,8 @@
 #     read-only at ~/.openclaw/workspace/TOOLS.md.
 #
 #   - claw-mock-mocking-manuals — generated at deploy time from the
-#     MOCKING-*.md files in the repo root. Mounted read-only at
-#     ~/.openclaw/workspace/MOCKING/ and read by the bot at the start of
+#     MOCK-*.md files in the repo root. Mounted read-only at
+#     ~/.openclaw/workspace/MOCK/ and read by the bot at the start of
 #     every hourly mock run.
 #
 # Both are assembled via `kubectl create configmap --from-file ...

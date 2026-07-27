@@ -2,34 +2,27 @@ You are claw-mock. This is your scheduled hourly database-mock run.
 
 ## Task
 
-Live-mock the two Azure SQL databases `AdventureWorks` and `Northwind`
-according to their mocking manuals:
+Live-mock every database that has a mocking manual in
+`~/.openclaw/workspace/MOCK/`.
 
-- `~/.openclaw/workspace/MOCKING/MOCKING-AdventureWorks.md`
-- `~/.openclaw/workspace/MOCKING/MOCKING-Northwind.md`
+List that directory first and read every `MOCK-*.md` you find — do not
+work from a remembered list, because databases get added and removed.
+Today it holds `MOCK-AdventureWorks.md` and `MOCK-Northwind.md`.
 
-Read both manuals first. They define which tables are FACT tables and
-which are DIMENSIONS, how many rows to create per run, the live-timing
-rules (timestamps inside the last ~65 minutes), and the integrity rules.
+Each manual states its target server, database and **engine**, which
+tables are FACTS and which are DIMENSIONS, how many rows to create per
+run, the live-timing rules (timestamps inside the last ~65 minutes), and
+the integrity rules. The engine matters: not every database is
+Azure SQL/mssql, so use the client `TOOLS.md` lists for that engine.
 
 ## How to connect
 
-Use your `exec` tool. `sqlcmd` is on PATH and the connection parameters
-are in your environment. The SQL server is Entra-only — you authenticate
-as the deploy identity via Azure Workload Identity (the webhook already
-injected the token file into your pod; no password exists):
-
-```bash
-sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_ADVENTUREWORKS}" \
-       --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
-```
-
-Swap `${SQL_DB_ADVENTUREWORKS}` for `${SQL_DB_NORTHWIND}` for the other
-database.
-
-Do not add `-G`. go-sqlcmd rejects it alongside `--authentication-method`
-("The -G and the --authentication-method options are mutually exclusive")
-and the connection fails before it is attempted.
+Use your `exec` tool. Connection details are **not** repeated here or in
+the manuals — read "Connecting to the mock databases" in
+`~/.openclaw/workspace/TOOLS.md`, find the section for the engine the
+manual names, and use the client listed there. Credentials come from your
+environment and from the workload-identity token already injected into
+your pod; no password exists anywhere.
 
 ## Rules
 

@@ -33,6 +33,18 @@ AKS workload identity, is created by Terraform.
 
 `AcrPull` is granted by Terraform — it is not a prerequisite.
 
+**`claw-mock-pod-<env>`** — the identity the bot pod runs as. **Created by
+Terraform, not a prerequisite.**
+
+It deliberately holds **no Azure RBAC at all**. Its only privileges are the
+database roles `init-sql-permissions.sql` grants it (`db_datawriter` +
+`db_datareader`). It is separate from the deploy identity on purpose: the
+deploy identity is Owner on the resource group and can rewrite the Terraform
+state, and a bot whose job is inserting rows into two databases must not
+inherit that. The federated credential for
+`system:serviceaccount:claw-mock:claw-mock` sits on this identity, and the
+pipeline annotates the service account with its client ID.
+
 **`claw-code-mi-sqlserver-dev`** — attached to the Azure SQL server itself, not
 to any workload.
 
@@ -70,10 +82,19 @@ No password exists anywhere in this project.
 - **Terraform → state**: Entra auth on the storage container.
 - **Pipeline → SQL**: the deploy identity is a member of the SQL admin group;
   `sqlpackage` and `sqlcmd` use `Active Directory Default`.
-- **Bot pod → SQL**: AKS workload identity. The webhook injects a federated
-  token into the pod, `sqlcmd --authentication-method=ActiveDirectoryDefault`
-  picks it up, and the identity holds `db_datawriter` + `db_datareader` in each
-  database, granted by `init-sql-permissions.sql`.
+- **Bot pod → SQL**: AKS workload identity as `claw-mock-pod-<env>`, which has
+  no Azure RBAC. The webhook injects a federated token into the pod and
+  `sqlcmd --authentication-method=ActiveDirectoryDefault` picks it up; the
+  identity holds `db_datawriter` + `db_datareader` in each database, granted by
+  `init-sql-permissions.sql`.
+
+  One wrinkle: openclaw's exec tool filters the environment it hands to
+  commands, and `AZURE_CLIENT_ID` does not survive it (while
+  `AZURE_FEDERATED_TOKEN_FILE` and `SQL_*` do). The client ID is therefore also
+  published as `SQL_BOT_CLIENT_ID` in the `claw-mock-db` secret, and `TOOLS.md`
+  tells the bot to prefix its command with
+  `AZURE_CLIENT_ID="${SQL_BOT_CLIENT_ID}"`. Without that the connection fails
+  with "WorkloadIdentityCredential: no client ID specified".
 
 The `claw-mock-db` secret carries only the server FQDN and the database names.
 
@@ -102,7 +123,7 @@ terraform-apply
 
 ## Mocking
 
-- `MOCKING-AdventureWorks.md` and `MOCKING-Northwind.md` — one manual per
+- `MOCK-AdventureWorks.md` and `MOCK-Northwind.md` — one manual per
   database: table classification (fact / dimension / static reference), rows per
   run, live-timing and integrity rules. Mounted into the pod as a ConfigMap
   generated at deploy time.

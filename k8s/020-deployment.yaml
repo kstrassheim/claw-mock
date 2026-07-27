@@ -90,12 +90,12 @@ spec:
             - -c
             - |
               # Pre-create the dirs the main container's ConfigMap
-              # mounts target (workspace/MOCKING/, workspace/skills/
+              # mounts target (workspace/MOCK/, workspace/skills/
               # mocker/). If we don't, kubelet creates them at
               # main-container start as root:root mode 0755 — fsGroup
               # re-chgrps to gid 1000 but doesn't add g+w, and the bot
               # can't write siblings next to them.
-              mkdir -p /home/node/.openclaw/workspace/MOCKING
+              mkdir -p /home/node/.openclaw/workspace/MOCK
               mkdir -p /home/node/.openclaw/workspace/skills/mocker
               chown -R 1000:1000 /home/node/.openclaw
               chmod -R u+rwX,g+rwX /home/node/.openclaw
@@ -165,9 +165,9 @@ spec:
               subPath: TOOLS.md
             # Mocking manuals, read by the bot at the start of every
             # hourly mock run. ConfigMap content is generated at deploy
-            # time from the MOCKING-*.md files in the repo root.
+            # time from the MOCK-*.md files in the repo root.
             - name: mocking-manuals
-              mountPath: /home/node/.openclaw/workspace/MOCKING
+              mountPath: /home/node/.openclaw/workspace/MOCK
             # `mocker` chat skill — toggle / inspect the hourly
             # db-mocker CronJob from chat. Pod restart required to pick
             # up ConfigMap edits.

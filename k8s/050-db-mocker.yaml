@@ -24,7 +24,7 @@ data:
     (`0 * * * *`). On each tick it `kubectl exec`s into the main
     claw-mock pod and backgrounds `mock-runner`, which runs one
     `openclaw agent --local --deliver` turn. The agent reads the
-    mocking manuals at `~/.openclaw/workspace/MOCKING/MOCKING-*.md`,
+    mocking manuals at `~/.openclaw/workspace/MOCK/MOCK-*.md`,
     mocks both databases via `sqlcmd`, and delivers a summary to the
     main session's channel: rows created this run, grouped by
     database → fact/dimension → table, or the failure with the SQL

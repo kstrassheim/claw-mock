@@ -148,15 +148,40 @@ resource "azurerm_role_assignment" "aks_admin" {
   principal_id         = data.azuread_group.aks_admin.object_id
 }
 
+# Identity the bot pod runs as. Deliberately separate from the deploy
+# identity, and deliberately holds NO Azure RBAC at all.
+#
+# The pod previously federated onto deploy-claw-mock-dev, which is Owner on
+# this resource group and Storage Blob Data Contributor on the Terraform state
+# container. A bot whose whole job is inserting rows into two databases does
+# not need — and should not have — the ability to rewrite the infrastructure
+# or the state file. Its only privileges are the database roles that
+# init-sql-permissions.sql grants it (db_datawriter + db_datareader).
+#
+# Created here rather than referenced as a pre-existing object because it
+# needs no tenant-admin grant: no directory role, no subscription role. The
+# deploy identity is Owner on this resource group, so it can create it.
+resource "azurerm_user_assigned_identity" "pod" {
+  name                = "claw-mock-pod-${var.env}"
+  resource_group_name = data.azurerm_resource_group.rg.name
+  location            = local.location
+
+  tags = {
+    environment = var.env
+    project     = "claw-mock"
+    purpose     = "claw-mock bot pod workload identity"
+  }
+}
+
 # Federated credential that lets the claw-mock Kubernetes service account
 # (namespace/SA: claw-mock/claw-mock) exchange its projected token for an
-# Entra token of the deploy identity. This is the pod's ONLY credential —
+# Entra token of the pod identity. This is the pod's ONLY credential —
 # no keys, no secrets. The deploy pipeline annotates the SA with the
-# identity's client ID at deploy time (deploy_identity_client_id output).
+# identity's client ID at deploy time (pod_identity_client_id output).
 resource "azurerm_federated_identity_credential" "claw_mock_workload" {
   name                = "claw-mock-workload"
   resource_group_name = data.azurerm_resource_group.rg.name
-  parent_id           = data.azurerm_user_assigned_identity.deploy_identity.id
+  parent_id           = azurerm_user_assigned_identity.pod.id
   audience            = ["api://AzureADTokenExchange"]
   issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
   subject             = "system:serviceaccount:${var.namespace}:claw-mock"
@@ -276,4 +301,12 @@ output "kubeconfig" {
 output "deploy_identity_client_id" {
   description = "Client ID of the deploy-claw-mock-dev managed identity"
   value       = data.azurerm_user_assigned_identity.deploy_identity.client_id
+}
+
+# Consumed by deploy.yml to annotate the claw-mock service account
+# (azure.workload.identity/client-id). This is the identity the pod actually
+# authenticates as — not the deploy identity.
+output "pod_identity_client_id" {
+  description = "Client ID of the claw-mock pod's workload identity"
+  value       = azurerm_user_assigned_identity.pod.client_id
 }

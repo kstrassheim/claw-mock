@@ -2,7 +2,7 @@
 # mock-runner: backgrounded subprocess inside the claw-mock container.
 #
 # Runs one hourly database-mock turn: `openclaw agent --local --deliver`
-# with the mock prompt. The agent reads the MOCKING-*.md manuals from the
+# with the mock prompt. The agent reads the MOCK-*.md manuals from the
 # workspace, mocks the databases via sqlcmd, and its final message — the
 # per-database / per-fact-dimension / per-table row-count summary (or the
 # failure with the SQL error) — is delivered to the main session's

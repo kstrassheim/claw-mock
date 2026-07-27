@@ -22,7 +22,7 @@ on:
       - 'database/**'
       - 'k8s/**'
       - 'VERSIONS'
-      - 'MOCKING-*.md'
+      - 'MOCK-*.md'
       - '**.tf'
       - '**.tfvars'
       - '.github/workflows/deploy.yml'
@@ -494,7 +494,14 @@ jobs:
         # from the Terraform output — never hardcoded.
         run: |
           set -euo pipefail
-          CLIENT_ID=$(jq -r '.deploy_identity_client_id.value' /tmp/tfout/terraform_output.json)
+          # The pod identity, not the deploy identity. The deploy identity is
+          # Owner on the resource group and can write the Terraform state;
+          # the bot must not inherit either.
+          CLIENT_ID=$(jq -r '.pod_identity_client_id.value' /tmp/tfout/terraform_output.json)
+          if [ -z "$CLIENT_ID" ] || [ "$CLIENT_ID" = "null" ]; then
+            echo "::error::pod_identity_client_id missing from terraform output"
+            exit 1
+          fi
           kubectl -n claw-mock annotate serviceaccount claw-mock \
             azure.workload.identity/client-id="$CLIENT_ID" --overwrite
 
@@ -507,13 +514,24 @@ jobs:
             --dry-run=client -o yaml \
           | kubectl apply -f -
 
-      - name: Build and apply mocking-manuals ConfigMap from /MOCKING-*.md
+      - name: Build and apply mocking-manuals ConfigMap from /MOCK-*.md
+        # Globbed rather than listed file by file, so adding a database is
+        # just dropping a MOCK-<name>.md in the repo root — no workflow edit.
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          FROM_FILE_ARGS=()
+          for manual in MOCK-*.md; do
+            FROM_FILE_ARGS+=(--from-file="$manual")
+          done
+          if [ ${#FROM_FILE_ARGS[@]} -eq 0 ]; then
+            echo "::error::no MOCK-*.md manuals found in the repo root"
+            exit 1
+          fi
+          echo "Manuals: ${FROM_FILE_ARGS[*]}"
           kubectl create configmap claw-mock-mocking-manuals \
             --namespace claw-mock \
-            --from-file=MOCKING-AdventureWorks.md \
-            --from-file=MOCKING-Northwind.md \
+            "${FROM_FILE_ARGS[@]}" \
             --dry-run=client -o yaml \
           | kubectl apply -f -
 

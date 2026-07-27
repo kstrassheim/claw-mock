@@ -1,18 +1,23 @@
-# MOCKING — Northwind
+# MOCK — Northwind
 
 Mocking manual for the `Northwind` database. Read by the claw-mock bot
 at the start of every hourly mock run (mounted into the pod at
-`~/.openclaw/workspace/MOCKING/MOCKING-Northwind.md`).
+`~/.openclaw/workspace/MOCK/MOCK-Northwind.md`).
 
-## Connection
+This file covers only what is specific to this database: where it lives,
+which tables are facts and which are dimensions, and how they may move.
+How to connect is in `TOOLS.md`, and the report format is in the run
+prompt — neither is repeated here.
 
-```bash
-sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_NORTHWIND}" \
-       --authentication-method=ActiveDirectoryDefault -l 30 -N -C
-```
+## Target
 
-(Entra-only server — the bot authenticates via Azure Workload Identity
-as the deploy identity. No SQL user/password exists.)
+| | |
+| --- | --- |
+| Engine | `mssql` (Azure SQL) |
+| Server | `${SQL_SERVER_FQDN}` |
+| Database | `${SQL_DB_NORTHWIND}` |
+
+Connect as described in `TOOLS.md` ("Connecting to the mock databases").
 
 ## Table classification
 
@@ -67,21 +72,3 @@ The run interval is **1 hour**. To look like a live OLTP database:
 - `[Order Details]` PK is (`OrderID`, `ProductID`) — one row per product
   per order.
 
-## Reporting
-
-At the end of the run, report the number of rows **you created in this
-run** per table, grouped:
-
-```
-Northwind
-  fact
-    Orders: +N
-    Order Details: +N
-  dimension
-    Customers: +N
-    Products: +N
-    ...
-```
-
-Tables with zero new rows may be omitted from the report. On failure,
-report the failing table and the SQL error message verbatim.

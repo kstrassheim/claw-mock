@@ -105,6 +105,19 @@ resource "kubernetes_secret" "claw_mock_db" {
     SQL_SERVER_FQDN       = azurerm_mssql_server.sql.fully_qualified_domain_name
     SQL_DB_ADVENTUREWORKS = azurerm_mssql_database.adventureworks.name
     SQL_DB_NORTHWIND      = azurerm_mssql_database.northwind.name
+
+    # Client ID of the identity the pod authenticates as. The workload-identity
+    # webhook already injects it as AZURE_CLIENT_ID, but openclaw's exec tool
+    # filters the environment it hands to commands and AZURE_CLIENT_ID does not
+    # survive, so DefaultAzureCredential inside the bot's sqlcmd fails with
+    # "WorkloadIdentityCredential: no client ID specified" while
+    # AZURE_FEDERATED_TOKEN_FILE and SQL_* come through fine.
+    #
+    # Exposing it under a second name that does survive lets the bot set
+    # AZURE_CLIENT_ID itself for the one command that needs it — see TOOLS.md.
+    # Not a secret: a client ID is a public identifier, and it is already in
+    # this same secret's blast radius.
+    SQL_BOT_CLIENT_ID = azurerm_user_assigned_identity.pod.client_id
   }
   depends_on = [kubernetes_namespace.claw-mock]
 }
@@ -128,5 +141,5 @@ output "sql_databases" {
 # the identity is defined in exactly one place.
 output "pod_identity_name" {
   description = "Display name of the managed identity the claw-mock pod authenticates as"
-  value       = data.azurerm_user_assigned_identity.deploy_identity.name
+  value       = azurerm_user_assigned_identity.pod.name
 }
