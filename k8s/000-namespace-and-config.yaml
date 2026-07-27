@@ -1,0 +1,23 @@
+---
+# Namespace only. Two ConfigMaps are deliberately NOT declared here:
+#
+#   - claw-mock-tools-md — generated at deploy time by the "Build and
+#     apply claw-mock-tools-md ConfigMap" step in deploy.yml, which
+#     concatenates k8s/tools/*.md into a single TOOLS.md key. Mounted
+#     read-only at ~/.openclaw/workspace/TOOLS.md.
+#
+#   - claw-mock-mocking-manuals — generated at deploy time from the
+#     MOCKING-*.md files in the repo root. Mounted read-only at
+#     ~/.openclaw/workspace/MOCKING/ and read by the bot at the start of
+#     every hourly mock run.
+#
+# Both are assembled via `kubectl create configmap --from-file ...
+# --dry-run=client -o yaml | kubectl apply -f -` so the per-file content
+# stays reviewable markdown in git instead of YAML literals.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: claw-mock
+  labels:
+    environment: dev
+    project: claw-mock

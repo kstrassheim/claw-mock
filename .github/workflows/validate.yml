@@ -1,0 +1,296 @@
+name: Validate (Pull Request)
+
+# Runs on every PR to main. Independent validation jobs in parallel:
+#   - check-minimax-secret : fail the PR if MINIMAX_API_KEY is not set
+#   - terraform-plan       : init, validate, plan against current main state
+#   - dacpac-build         : build both .sqlproj into .dacpac artifacts
+#   - dacpac-deploy-test   : publish both dacpacs onto an ephemeral
+#                            SQL Server in docker-in-docker (dind)
+# None of these jobs change anything in Azure or the cluster.
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Intentionally NO `paths:` filter here. Required status checks on
+  # the main ruleset wait forever for path-filtered workflows that
+  # don't run; always running the jobs is cheaper than a stuck PR.
+
+env:
+  REGISTRY: clwmockdevdev1.azurecr.io
+  IMAGE_NAME: openclaw/claw-mock
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check-minimax-secret:
+    # openclaw in claw-mock runs on MiniMax M3 ONLY — no Mistral /
+    # Moonshot fallback exists. Catch a missing key at PR time instead
+    # of in the pod's render-config init container.
+    name: MINIMAX_API_KEY configured
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Check MINIMAX_API_KEY
+        env:
+          MINIMAX: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          if [ -z "$MINIMAX" ]; then
+            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
+            exit 1
+          fi
+          echo "OK — MINIMAX_API_KEY is configured."
+
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read TERRAFORM_VERSION from /VERSIONS
+        id: tfver
+        run: |
+          echo "version=$(grep '^TERRAFORM_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure backend state container exists
+        # The azurerm backend does not create its own container.
+        # Idempotent — no-op once `claw-mock` exists on mytofustates.
+        run: |
+          az storage container create \
+            --name claw-mock \
+            --account-name mytofustates \
+            --auth-mode login \
+            --output none || echo "container already exists (or is being created concurrently) — continuing"
+
+      - name: Get AKS credentials for kubernetes/helm providers
+        run: |
+          az aks get-credentials \
+            --resource-group claw-mock \
+            --name claw-mock-aks \
+            --file /tmp/kubeconfig_clawmock \
+            --admin
+
+      - name: Set Terraform environment variables
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_AZUREAD_AUTH=true" >> $GITHUB_ENV
+          echo "TF_VAR_env=dev" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=terraform" \
+            -backend-config="storage_account_name=mytofustates" \
+            -backend-config="container_name=claw-mock" \
+            -backend-config="key=dev.tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Upload Terraform Plan artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: terraform-plan
+          path: tfplan
+          retention-days: 7
+
+      - name: Plan Summary
+        run: |
+          echo "## Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          terraform show --json tfplan 2>/dev/null | \
+            jq -r '[
+              (.resources | length) as $total |
+              "### Resources: \($total)",
+              "",
+              (.resource_changes | group_by(.type) | map("\(.[0].type): \(length)") | join("\n"))
+            ] | join("\n")' >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  dacpac-build:
+    name: Dacpac Build (AdventureWorks + Northwind)
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build AdventureWorks dacpac
+        run: dotnet build database/AdventureWorks/AdventureWorks.sqlproj -c Release
+
+      - name: Build Northwind dacpac
+        run: dotnet build database/Northwind/Northwind.sqlproj -c Release
+
+      - name: Upload dacpac artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: dacpacs
+          path: |
+            database/AdventureWorks/bin/Release/AdventureWorks.dacpac
+            database/Northwind/bin/Release/Northwind.dacpac
+          retention-days: 7
+
+  dacpac-deploy-test:
+    # Sample dacpac deploy against an ephemeral SQL Server that lives
+    # only inside this job, via docker-in-docker (dind). Proves the
+    # dacpacs actually publish — schema, FKs, post-deployment seed
+    # script and the contained bot user — before anything is merged.
+    #
+    # (The issue text says "mysql db" — a dacpac only targets SQL
+    # Server, so the dind container is mcr.microsoft.com/mssql/server.)
+    name: Dacpac Deploy Test (ephemeral SQL Server via dind)
+    needs: dacpac-build
+    runs-on: ubuntu-latest
+    environment: dev
+
+    services:
+      docker:
+        image: docker:27-dind
+        env:
+          DOCKER_TLS_CERTDIR: ""
+        ports:
+          - 2375:2375
+          - 1433:1433
+        options: --privileged
+
+    env:
+      DOCKER_HOST: tcp://localhost:2375
+      SA_PASSWORD: DindTest!Pw0rd42
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download dacpac artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: dacpacs
+          path: /tmp/dacpacs
+
+      - name: Install sqlpackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Wait for dind daemon
+        run: |
+          for i in $(seq 1 30); do
+            docker info >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker info >/dev/null
+
+      - name: Start ephemeral SQL Server
+        run: |
+          docker run -d --name mssql \
+            -e ACCEPT_EULA=Y \
+            -e MSSQL_SA_PASSWORD="$SA_PASSWORD" \
+            -p 1433:1433 \
+            mcr.microsoft.com/mssql/server:2022-latest
+
+      - name: Wait for SQL Server to accept connections
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+                 -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 5 \
+                 -Q "SELECT 1" >/dev/null 2>&1; then
+              echo "SQL Server is up"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::SQL Server did not come up in time"
+          docker logs mssql | tail -50
+          exit 1
+
+      - name: Create empty target databases
+        run: |
+          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 \
+            -Q "CREATE DATABASE [AdventureWorks]; CREATE DATABASE [Northwind];"
+
+      - name: Publish AdventureWorks dacpac
+        run: |
+          sqlpackage /a:Publish \
+            /sf:/tmp/dacpacs/AdventureWorks.dacpac \
+            /tsn:localhost,1433 /tdn:AdventureWorks \
+            /tu:sa /tp:"$SA_PASSWORD" \
+            /p:TrustServerCertificate=True \
+            /v:BotPassword="DindBot!Pw0rd42"
+
+      - name: Publish Northwind dacpac
+        run: |
+          sqlpackage /a:Publish \
+            /sf:/tmp/dacpacs/Northwind.dacpac \
+            /tsn:localhost,1433 /tdn:Northwind \
+            /tu:sa /tp:"$SA_PASSWORD" \
+            /p:TrustServerCertificate=True \
+            /v:BotPassword="DindBot!Pw0rd42"
+
+      - name: Verify seed data + bot user (AdventureWorks)
+        run: |
+          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
+            -d AdventureWorks -Q "
+              SET NOCOUNT ON;
+              SELECT 'Products=' + CAST(COUNT(*) AS VARCHAR) FROM [Production].[Product];
+              SELECT 'Orders=' + CAST(COUNT(*) AS VARCHAR) FROM [Sales].[SalesOrderHeader];
+              SELECT 'BotUser=' + [name] FROM [sys].[database_principals] WHERE [name] = 'clawmockbot';"
+
+      - name: Verify seed data + bot user (Northwind)
+        run: |
+          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
+            -d Northwind -Q "
+              SET NOCOUNT ON;
+              SELECT 'Products=' + CAST(COUNT(*) AS VARCHAR) FROM [dbo].[Products];
+              SELECT 'Orders=' + CAST(COUNT(*) AS VARCHAR) FROM [dbo].[Orders];
+              SELECT 'BotUser=' + [name] FROM [sys].[database_principals] WHERE [name] = 'clawmockbot';"
+
+      - name: Verify bot login works (contained user auth)
+        run: |
+          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U clawmockbot -P "DindBot!Pw0rd42" \
+            -d AdventureWorks -N -C -l 15 -Q "SELECT 'bot auth OK' AS result;"
+          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U clawmockbot -P "DindBot!Pw0rd42" \
+            -d Northwind -N -C -l 15 -Q "SELECT 'bot auth OK' AS result;"

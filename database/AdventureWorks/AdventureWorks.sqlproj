@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AdventureWorks SQL database project (compact representative subset).
+
+  Build the dacpac:
+    dotnet build AdventureWorks.sqlproj -c Release
+    -> bin/Release/AdventureWorks.dacpac
+
+  Deploy locally (VS Code "SQL Database Projects" extension, or CLI):
+    sqlpackage /a:Publish \
+      /sf:bin/Release/AdventureWorks.dacpac \
+      /tsn:<server> /tdn:AdventureWorks \
+      /tu:<user> /tp:<password> \
+      /v:BotPassword="<password for the contained user clawmockbot>"
+
+  SDK: MSBuild.Sdk.SqlProj (cross-platform, builds on any dotnet SDK —
+  this is what the CI dacpac-build job uses on ubuntu-latest).
+-->
+<Project Sdk="MSBuild.Sdk.SqlProj/3.1.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <SqlServerVersion>SqlAzure</SqlServerVersion>
+    <RunSqlCodeAnalysis>False</RunSqlCodeAnalysis>
+  </PropertyGroup>
+  <ItemGroup>
+    <PostDeploy Include="Scripts\PostDeployment.sql" />
+  </ItemGroup>
+</Project>

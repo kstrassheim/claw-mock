@@ -1,0 +1,216 @@
+---
+# SKILL.md for the `mocker` chat skill, mounted at
+# ~/.openclaw/workspace/skills/mocker/SKILL.md via subPath.
+# Lets the user toggle / inspect the hourly database-mocking CronJob
+# from chat without an image rebuild — edit, push, redeploy applies the
+# new ConfigMap, then `kubectl rollout restart deployment/claw-mock`
+# picks it up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claw-mock-skill-mocker
+  namespace: claw-mock
+data:
+  SKILL.md: |
+    ---
+    name: mocker
+    description: Toggle and inspect the hourly database mocker (db-mocker CronJob) that live-mocks AdventureWorks and Northwind.
+    user-invocable: true
+    ---
+
+    # mocker — control the hourly database mocker
+
+    A CronJob `db-mocker` (namespace `claw-mock`) fires **once an hour**
+    (`0 * * * *`). On each tick it `kubectl exec`s into the main
+    claw-mock pod and backgrounds `mock-runner`, which runs one
+    `openclaw agent --local --deliver` turn. The agent reads the
+    mocking manuals at `~/.openclaw/workspace/MOCKING/MOCKING-*.md`,
+    mocks both databases via `sqlcmd`, and delivers a summary to the
+    main session's channel: rows created this run, grouped by
+    database → fact/dimension → table, or the failure with the SQL
+    error message.
+
+    **Concurrency:** a mkdir lock at `~/.openclaw/.mock-lock/` prevents
+    overlapping runs; a tick that finds the lock held is skipped.
+
+    Use this skill when the user says any of:
+
+    | User says | Run |
+    |---|---|
+    | `mocker status`, `is the mocker on?` | the status command |
+    | `mocker start`, `enable mocking` | the start command |
+    | `mocker stop`, `pause mocking` | the stop command |
+    | `mocker run`, `mock now`, `run a mock` | the run-now command |
+    | `mocker logs` | tail the latest mock log |
+
+    ## Commands (run via your `exec` tool — kubectl is in PATH)
+
+    ### status
+
+    ```
+    kubectl -n claw-mock get cronjob db-mocker \
+      -o jsonpath='suspended={.spec.suspend}{"\n"}schedule={.spec.schedule}{"\n"}lastSchedule={.status.lastScheduleTime}{"\n"}lastSuccess={.status.lastSuccessfulTime}{"\n"}'
+    ```
+
+    Report `suspended=true` as **stopped**, `false` as **running**.
+
+    ### start
+
+    ```
+    kubectl -n claw-mock patch cronjob db-mocker \
+      -p '{"spec":{"suspend":false}}'
+    ```
+
+    ### stop
+
+    Suspend the CronJob AND kill any in-flight mock run inside this pod:
+
+    ```
+    kubectl -n claw-mock patch cronjob db-mocker \
+      -p '{"spec":{"suspend":true}}'
+    pkill -f 'mock-runner' || true
+    rm -rf $HOME/.openclaw/.mock-lock 2>/dev/null
+    ```
+
+    ### run now
+
+    Fire one mock run immediately (same path the CronJob uses):
+
+    ```
+    setsid bash -c 'nohup /usr/local/bin/mock-runner >/dev/null 2>&1 </dev/null &'
+    ```
+
+    ### logs
+
+    ```
+    ls -1t $HOME/.openclaw/mock-logs/ | head -5
+    tail -n 80 $HOME/.openclaw/mock-logs/$(ls -1t $HOME/.openclaw/mock-logs/ | head -1)
+    ```
+
+    ## Reporting style
+
+    Keep replies terse. One line per piece of state. Example status:
+
+    > Mocker: **running** · schedule `0 * * * *` · last fired
+    > 2026-07-27T16:00:00Z.
+---
+# db-mocker CronJob — fires once an hour and `kubectl exec`s into the
+# main claw-mock pod, backgrounding `mock-runner` there.
+#
+# Architecture, top-down:
+#   - This CronJob runs `cron-mock-spawn` (baked into the image).
+#   - cron-mock-spawn finds the running claw-mock pod and kubectl-execs
+#     `nohup mock-runner ...&` into it.
+#   - mock-runner acquires the ~/.openclaw/.mock-lock/ lock and runs one
+#     `openclaw agent --local --deliver` turn with the mock prompt
+#     (/usr/local/share/claw-mock/mock-prompt.md). The agent's final
+#     message — the per-database mock summary — is delivered to the
+#     main session's channel (Telegram).
+#
+# Toggle from chat: see the SKILL.md above.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: db-mocker
+  namespace: claw-mock
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: db-mocker
+  namespace: claw-mock
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: db-mocker
+  namespace: claw-mock
+subjects:
+  - kind: ServiceAccount
+    name: db-mocker
+    namespace: claw-mock
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: db-mocker
+---
+# Permissions for the bot's chat-skill commands (CronJob get/patch
+# only). Subprocess kill happens locally inside the pod via pkill,
+# not via the K8s API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: db-mocker-control
+  namespace: claw-mock
+rules:
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["db-mocker"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: db-mocker-control
+  namespace: claw-mock
+subjects:
+  - kind: ServiceAccount
+    name: claw-mock
+    namespace: claw-mock
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: db-mocker-control
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-mocker
+  namespace: claw-mock
+  labels:
+    app: db-mocker
+spec:
+  # Hourly, on the hour — matches the mock interval the manuals describe.
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  # spec.suspend deliberately omitted — K8s defaults to false. With the
+  # field unmanaged at deploy time, chat-driven `mocker stop` (which
+  # patches suspend=true at runtime) sticks across `kubectl apply -f k8s/`
+  # reconciles.
+  jobTemplate:
+    metadata:
+      labels:
+        app: db-mocker
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 300
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: db-mocker
+        spec:
+          serviceAccountName: db-mocker
+          restartPolicy: Never
+          containers:
+            - name: mocker
+              image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+              imagePullPolicy: Always
+              command: ["/usr/local/bin/cron-mock-spawn"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
