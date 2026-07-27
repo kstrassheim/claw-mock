@@ -26,7 +26,7 @@ resource "kubernetes_namespace" "claw-mock" {
 resource "azurerm_storage_account" "pv" {
   name                       = local.storage_account_name
   resource_group_name        = data.azurerm_resource_group.rg.name
-  location                   = data.azurerm_resource_group.rg.location
+  location                   = local.location
   account_tier               = "Standard"
   account_replication_type   = "LRS"
   min_tls_version            = "TLS1_2"
@@ -51,7 +51,7 @@ resource "azurerm_storage_share" "claw_mock" {
 resource "azurerm_container_registry" "acr" {
   name                = "clwmock${var.env}${var.unique_suffix}" # clwmock + env + suffix, max 50 chars
   resource_group_name = data.azurerm_resource_group.rg.name
-  location            = data.azurerm_resource_group.rg.location
+  location            = local.location
   sku                 = "Basic"
   admin_enabled       = false # Entra-only auth, no admin user
 
@@ -92,7 +92,7 @@ output "container_registry_login_server" {
 resource "azurerm_kubernetes_cluster" "aks" {
   name                = local.cluster_name
   resource_group_name = data.azurerm_resource_group.rg.name
-  location            = data.azurerm_resource_group.rg.location
+  location            = local.location
   dns_prefix          = "claw-mock"
   kubernetes_version  = local.aks_version
   sku_tier            = "Free"
@@ -192,17 +192,17 @@ resource "kubernetes_network_policy_v1" "allow_dns" {
             "kubernetes.io/metadata.name" = "kube-system"
           }
         }
+        ports {
+          protocol = "UDP"
+          port     = "53"
+        }
+        ports {
+          protocol = "TCP"
+          port     = "53"
+        }
       }
-      ports {
-        protocol = "UDP"
-        port     = "53"
-      }
-      ports {
-        protocol = "TCP"
-        port     = "53"
-      }
+      policy_types = ["Egress"]
     }
-    policy_types = ["Egress"]
   }
 }
 

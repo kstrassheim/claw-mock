@@ -12,7 +12,7 @@ variable "cluster_name" {
 
 variable "location" {
   description = "Azure region"
-  default     = "westeurope"
+  default     = "northeurope"
   type        = string
 }
 

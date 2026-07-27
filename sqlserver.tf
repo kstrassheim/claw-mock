@@ -13,7 +13,7 @@
 resource "azurerm_mssql_server" "sql" {
   name                = local.sql_server_name
   resource_group_name = data.azurerm_resource_group.rg.name
-  location            = data.azurerm_resource_group.rg.location
+  location            = local.location
   version             = "12.0"
   minimum_tls_version = "1.2"
 
