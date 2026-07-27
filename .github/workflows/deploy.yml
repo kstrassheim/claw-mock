@@ -111,57 +111,6 @@ jobs:
       - name: Upload Terraform Output
         run: terraform output -json > terraform_output.json
 
-      # Database-level access for the pod's managed identity. This cannot be
-      # expressed in Terraform — on an Entra-only server it is T-SQL run
-      # against each database — so it lives in init-sql-permissions.sql and
-      # runs here, immediately after apply, before anything tries to use the
-      # databases.
-      #
-      # The script ships with a __POD_IDENTITY_NAME__ placeholder; the real
-      # identity comes from the terraform output so it is defined in one place.
-      # Runs as the deploy identity, which is a member of the server's Entra
-      # admin group, and depends on the server's user-assigned identity
-      # (claw-code-mi-sqlserver-dev) for the directory lookup.
-      - name: Grant pod identity on server and databases
-        env:
-          SQLCMD_VERSION: '1.8.2'
-        run: |
-          set -euo pipefail
-          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' terraform_output.json)
-          POD_IDENTITY=$(jq -r '.pod_identity_name.value' terraform_output.json)
-          if [ -z "$POD_IDENTITY" ] || [ "$POD_IDENTITY" = "null" ]; then
-            echo "::error::pod_identity_name missing from terraform output"
-            exit 1
-          fi
-
-          # go-sqlcmd from its GitHub release. The `sqlcmd` apt package is not
-          # in the runner's default sources (adding only the Microsoft signing
-          # key is not enough — that failed with "Unable to locate package").
-          mkdir -p "$HOME/.local/bin"
-          curl -sSLf -o /tmp/sqlcmd.tar.bz2 \
-            "https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2"
-          tar xjf /tmp/sqlcmd.tar.bz2 -C "$HOME/.local/bin"
-          chmod +x "$HOME/.local/bin/sqlcmd"
-          export PATH="$HOME/.local/bin:$PATH"
-          sqlcmd --version
-
-          # master first (server-level user), then every mock database
-          # (db_datawriter + db_datareader). Authentication is
-          # ActiveDirectoryDefault, which picks up the azure/login OIDC session
-          # above — i.e. the deploy identity, which is admin on this server via
-          # the local-data-admins-claw-mock-dev group.
-          DBS="master $(jq -r '.sql_databases.value | join(" ")' terraform_output.json)"
-          for DB in $DBS; do
-            echo "::group::Granting $POD_IDENTITY on $DB"
-            sed "s/__POD_IDENTITY_NAME__/${POD_IDENTITY}/g" \
-              init-sql-permissions.sql > "/tmp/init-${DB}.sql"
-            sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
-              --authentication-method ActiveDirectoryDefault \
-              --exit-on-error \
-              -i "/tmp/init-${DB}.sql"
-            echo "::endgroup::"
-          done
-
       - name: Upload Terraform Output artifact
         uses: actions/upload-artifact@v6
         with:
@@ -246,6 +195,142 @@ jobs:
           az logout
           rm -rf ~/.azure 2>/dev/null || true
 
+  grant-sql-access:
+    # Database access for the pod's managed identity. This cannot be expressed
+    # in Terraform — on an Entra-only server it is T-SQL run against the
+    # server — so it lives in init-sql-permissions.sql.
+    #
+    # Runs after dacpac-build-deploy, not after terraform-apply: a dacpac
+    # publish reconciles database objects against the package, so grants made
+    # before it are not guaranteed to survive. Doing it last means the final
+    # state of every database is the one the bot actually connects to.
+    #
+    # Runs as the deploy identity (azure/login OIDC below), which is admin on
+    # the server via local-data-admins-claw-mock-dev, so no password is used.
+    name: Grant pod identity on SQL
+    needs: dacpac-build-deploy
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      SQLCMD_VERSION: '1.8.2'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download Terraform Output artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: terraform-output
+          path: /tmp/tfout
+
+      - name: Install sqlcmd
+        # go-sqlcmd from its GitHub release. The `sqlcmd` apt package is not in
+        # the runner's default sources — adding only the Microsoft signing key
+        # is not enough and fails with "Unable to locate package sqlcmd".
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -sSLf -o /tmp/sqlcmd.tar.bz2 \
+            "https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2"
+          tar xjf /tmp/sqlcmd.tar.bz2 -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/sqlcmd"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Grant pod identity on server and databases
+        run: |
+          set -euo pipefail
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          POD_IDENTITY=$(jq -r '.pod_identity_name.value' /tmp/tfout/terraform_output.json)
+          if [ -z "$POD_IDENTITY" ] || [ "$POD_IDENTITY" = "null" ]; then
+            echo "::error::pod_identity_name missing from terraform output"
+            exit 1
+          fi
+          sqlcmd --version
+
+          # master first — that is the server-level user — then every mock
+          # database, where the role membership (db_datawriter + db_datareader)
+          # is granted.
+          DBS="master $(jq -r '.sql_databases.value | join(" ")' /tmp/tfout/terraform_output.json)"
+          for DB in $DBS; do
+            echo "::group::Granting $POD_IDENTITY on $DB"
+            sed "s/__POD_IDENTITY_NAME__/${POD_IDENTITY}/g" \
+              init-sql-permissions.sql > "/tmp/init-${DB}.sql"
+            sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
+              --authentication-method ActiveDirectoryDefault \
+              --exit-on-error \
+              -i "/tmp/init-${DB}.sql"
+            echo "::endgroup::"
+          done
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  apply-secrets:
+    # Renders claw-mock-secrets from the GitHub `dev` environment secrets and
+    # applies it to the cluster. Nothing else does this: seal-secrets.yml only
+    # triggers on changes to itself, so a normal deploy never applied the
+    # secret and the bot started without its credentials.
+    #
+    # Depends only on terraform-apply (the cluster must exist), so it runs in
+    # parallel with the dacpac and image jobs. The manifest is piped straight
+    # from `kubectl create -o yaml` into `kubectl apply -f -` and never
+    # touches git.
+    name: Apply claw-mock-secrets to cluster
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      KUBECONFIG: /tmp/kubeconfig
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group claw-mock-dev \
+            --name claw-mock-aks \
+            --file "$KUBECONFIG" \
+            --admin
+
+      - name: Apply claw-mock-secrets
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINIMAX_API_KEY:-}" ]; then
+            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
+            exit 1
+          fi
+          kubectl create secret generic claw-mock-secrets \
+            --namespace claw-mock \
+            --from-literal=MINIMAX_API_KEY="$MINIMAX_API_KEY" \
+            --from-literal=TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
   build-and-push-image:
     name: Build and Push Docker image to ACR
     needs: terraform-apply
@@ -321,7 +406,10 @@ jobs:
 
   deploy-to-aks:
     name: Deploy to AKS (apply manifests + rollout)
-    needs: [build-and-push-image, dacpac-build-deploy]
+    # Also waits on apply-secrets and grant-sql-access so the pods come up with
+    # their credentials present and their identity already able to reach the
+    # databases, rather than crash-looping until a later run fixes it.
+    needs: [build-and-push-image, dacpac-build-deploy, apply-secrets, grant-sql-access]
     runs-on: ubuntu-latest
     environment: dev
     env:
