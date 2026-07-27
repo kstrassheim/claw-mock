@@ -48,9 +48,14 @@ RUN apt-get update \
 #                      (so the CronJob pod itself exits immediately).
 #   mock-runner      — runs inside the main pod; executes the hourly
 #                      mock turn via `openclaw agent --local --deliver`.
-COPY builder/cron-mock-spawn.sh /usr/local/bin/cron-mock-spawn
-COPY builder/mock-runner.sh     /usr/local/bin/mock-runner
-COPY builder/mock-prompt.md     /usr/local/share/claw-mock/mock-prompt.md
+#
+# Paths are relative to the build context, which deploy.yml sets to
+# ./builder (not the repo root) — so no `builder/` prefix here. With the
+# prefix, buildx looked for builder/builder/* and failed the build with
+# "/builder/mock-prompt.md: not found".
+COPY cron-mock-spawn.sh /usr/local/bin/cron-mock-spawn
+COPY mock-runner.sh     /usr/local/bin/mock-runner
+COPY mock-prompt.md     /usr/local/share/claw-mock/mock-prompt.md
 RUN chmod 0755 /usr/local/bin/cron-mock-spawn /usr/local/bin/mock-runner \
  && chown -R 1000:1000 /usr/local/share/claw-mock
 

@@ -168,15 +168,18 @@ jobs:
           name: terraform-output
           path: /tmp/tfout
 
+      # Authentication and Encrypt are connection-string settings, not DacFx
+      # publish properties: sqlpackage 170 rejects them as /p: with
+      #   'Authentication' is not a valid argument for the 'Publish' action.
+      # They have to travel inside /tcs: instead. (Same trap as
+      # TrustServerCertificate in validate.yml's dind test.)
       - name: Publish AdventureWorks dacpac
         run: |
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
             /sf:database/AdventureWorks/bin/Release/net8.0/AdventureWorks.dacpac \
-            /tsn:"$SQL_FQDN",1433 /tdn:AdventureWorks \
-            /p:Authentication="Active Directory Default" \
-            /p:Encrypt=True
+            /tcs:"Server=tcp:${SQL_FQDN},1433;Initial Catalog=AdventureWorks;Authentication=Active Directory Default;Encrypt=True"
 
       - name: Publish Northwind dacpac
         run: |
@@ -184,9 +187,7 @@ jobs:
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
             /sf:database/Northwind/bin/Release/net8.0/Northwind.dacpac \
-            /tsn:"$SQL_FQDN",1433 /tdn:Northwind \
-            /p:Authentication="Active Directory Default" \
-            /p:Encrypt=True
+            /tcs:"Server=tcp:${SQL_FQDN},1433;Initial Catalog=Northwind;Authentication=Active Directory Default;Encrypt=True"
 
       - name: Azure logout
         if: always()
