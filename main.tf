@@ -14,7 +14,19 @@ locals {
   storage_account_name = var.storage_account_name
   namespace            = var.namespace
   aks_version          = "1.35.3"
-  sql_server_name      = "claw-mock-sql-${var.env}"
+  # Renamed from "claw-mock-sql-${var.env}". The old name is stuck in an
+  # Azure name-to-location reservation pointing at northeurope, left behind
+  # by a create that failed there with ProvisioningDisabled. Every attempt to
+  # create it in westeurope then returned:
+  #   409 InvalidResourceLocation: The resource 'claw-mock-sql-dev' already
+  #   exists in location 'northeurope' ... cannot be created in 'westeurope'
+  # No server object or DNS record exists under that name and `az resource
+  # show` reports ResourceNotFound, so there is nothing to delete and the
+  # reservation had not expired after ~35 minutes. A new name sidesteps it.
+  # Keeps the ${var.env} suffix so test/prod get their own server — Azure SQL
+  # server names are globally unique DNS labels (<name>.database.windows.net),
+  # so a static name would collide across environments.
+  sql_server_name = "claw-mock-sqlserver-${var.env}"
 }
 
 # Get existing resource group
