@@ -28,13 +28,45 @@ fi
 echo "$BASHPID $(date -Iseconds)" > "$LOCK_DIR/owner"
 trap 'rm -rf "$LOCK_DIR"' EXIT
 
+# Where the run report goes. Each run uses its own --session-id, so it has no
+# channel binding of its own and bare --deliver fails with
+# "Delivering to Telegram requires target <chatId>". The target is derived from
+# the paired owner in the persistent config rather than hardcoded, so pairing
+# once is enough — render-config.sh carries commands.ownerAllowFrom forward
+# across redeploys.
+#
+# If nobody has paired yet the run still happens; the report just stays in this
+# log instead of being delivered.
+TELEGRAM_TARGET="$(python3 - "$STATE_ROOT/openclaw.json" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for entry in (cfg.get("commands", {}).get("ownerAllowFrom") or []):
+    if isinstance(entry, str) and entry.startswith("telegram:"):
+        print(entry.split(":", 1)[1].strip())
+        break
+PY
+)"
+
+DELIVERY_ARGS=()
+if [ -n "$TELEGRAM_TARGET" ]; then
+  DELIVERY_ARGS=(--deliver --reply-channel telegram --reply-to "$TELEGRAM_TARGET")
+fi
+
 {
   echo "[$(date -Iseconds)] mock run starting (session $SESSION_ID)"
+  if [ -n "$TELEGRAM_TARGET" ]; then
+    echo "[$(date -Iseconds)] report will be delivered to telegram:$TELEGRAM_TARGET"
+  else
+    echo "[$(date -Iseconds)] no paired telegram owner found — report stays in this log"
+  fi
   timeout -k 60 "$TIMEOUT_SECONDS" openclaw agent \
     --local \
     --session-id "$SESSION_ID" \
     --timeout "$TIMEOUT_SECONDS" \
-    --deliver \
+    "${DELIVERY_ARGS[@]}" \
     --message-file /usr/local/share/claw-mock/mock-prompt.md
   rc=$?
   echo "[$(date -Iseconds)] mock run finished rc=$rc"
