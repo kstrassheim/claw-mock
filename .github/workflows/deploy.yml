@@ -1,12 +1,11 @@
 name: Deploy (Push to main)
 
-# Runs on every merge to main. Five jobs:
-#   1. check-minimax-secret  — fail-fast if MINIMAX_API_KEY is not set
-#   2. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
-#   3. dacpac-build-deploy   — build both dacpacs and publish them onto the
+# Runs on every merge to main. Four jobs:
+#   1. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
+#   2. dacpac-build-deploy   — build both dacpacs and publish them onto the
 #                              Azure SQL server (schema + seed data)
-#   4. build-and-push-image  — build the claw-mock image, push :latest+:sha
-#   5. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
+#   3. build-and-push-image  — build the claw-mock image, push :latest+:sha
+#   4. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
 #
 # Each job depends on the previous one succeeding (`needs:`), so a broken
 # step short-circuits the rest before it can do damage.
@@ -43,26 +42,8 @@ permissions:
   contents: read
 
 jobs:
-  check-minimax-secret:
-    # openclaw in claw-mock runs on MiniMax M3 ONLY — no fallback
-    # providers exist. Refuse to deploy without the key.
-    name: MINIMAX_API_KEY configured
-    runs-on: ubuntu-latest
-    environment: dev
-    steps:
-      - name: Check MINIMAX_API_KEY
-        env:
-          MINIMAX: ${{ secrets.MINIMAX_API_KEY }}
-        run: |
-          if [ -z "$MINIMAX" ]; then
-            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
-            exit 1
-          fi
-          echo "OK — MINIMAX_API_KEY is configured."
-
   terraform-apply:
     name: Terraform Apply
-    needs: check-minimax-secret
     runs-on: ubuntu-latest
     environment: dev
 
