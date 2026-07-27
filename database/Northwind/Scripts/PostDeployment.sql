@@ -1,12 +1,14 @@
 /*
 Post-deployment script for Northwind.
 
-1. Seeds a small, deterministic sample dataset (only into empty tables —
-   the script is idempotent across repeated dacpac publishes).
-2. Creates the contained database user `clawmockbot` that the claw-mock
-   bot uses for its hourly mock runs. The password is supplied at publish
-   time via the $(BotPassword) sqlcmd variable
-   (sqlpackage /v:BotPassword="...").
+Seeds a small, deterministic sample dataset (only into empty tables —
+the script is idempotent across repeated dacpac publishes).
+
+No database user is created here: the Azure SQL server is Entra-only
+(azuread_authentication_only), so SQL-authenticated contained users
+cannot exist. The claw-mock bot connects as the deploy identity
+(deploy-claw-mock-dev) via Azure Workload Identity; that identity is a
+member of the server's Entra-admin group and needs no per-database user.
 */
 
 -- =========================================================================
@@ -106,30 +108,5 @@ BEGIN
     (4, 3,  10.00, 20, 0),
     (4, 7,  15.50, 24, 0),
     (5, 6,  23.25,  6, 0);
-END
-GO
-
--- =========================================================================
--- Bot login: contained database user with SQL authentication.
--- $(BotPassword) is passed at publish time (sqlpackage /v:BotPassword=...).
--- db_owner is deliberate: the bot inserts/updates/deletes mock rows in
--- every table — scoped to this mock database only (contained user, no
--- server-level rights).
--- =========================================================================
-IF NOT EXISTS (SELECT 1 FROM [sys].[database_principals] WHERE [name] = N'clawmockbot')
-BEGIN
-    CREATE USER [clawmockbot] WITH PASSWORD = N'$(BotPassword)';
-END
-GO
-
-IF NOT EXISTS (
-    SELECT 1
-    FROM [sys].[database_role_members] rm
-    JOIN [sys].[database_principals] r ON rm.[role_principal_id] = r.[principal_id]
-    JOIN [sys].[database_principals] m ON rm.[member_principal_id] = m.[principal_id]
-    WHERE r.[name] = N'db_owner' AND m.[name] = N'clawmockbot'
-)
-BEGIN
-    ALTER ROLE [db_owner] ADD MEMBER [clawmockbot];
 END
 GO
