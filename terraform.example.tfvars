@@ -9,7 +9,7 @@ cluster_name         = "claw-mock-aks"
 location             = "westeurope"
 node_size            = "Standard_D2pds_v5"
 node_count           = 1
-storage_account_name = "clwmockdev"  # PV storage (Azure Files), globally unique, NOT mytofustates
+storage_account_name = "clwmockdev" # PV storage (Azure Files), globally unique, NOT mytofustates
 namespace            = "claw-mock"
-aks_admin_group_name = "local-data-admins-claw-mock-dev"  # Entra security group with AKS cluster-admin RBAC
-sql_admin_group_name = "local-data-admins-claw-mock-dev"  # Entra security group = SQL server Entra admin
+aks_admin_group_name = "local-data-admins-claw-mock-dev" # Entra security group with AKS cluster-admin RBAC
+sql_admin_group_name = "local-data-admins-claw-mock-dev" # Entra security group = SQL server Entra admin
