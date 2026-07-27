@@ -23,10 +23,10 @@ Connect as described in `TOOLS.md` ("Connecting to the mock databases").
 
 | Table | Type | Mock behaviour |
 |---|---|---|
-| `dbo.Orders` | **Fact** | Append new orders every run |
-| `dbo.[Order Details]` | **Fact** | Append line items for the new orders (1–3 per order) |
-| `dbo.Customers` | Dimension | Occasionally add a customer |
-| `dbo.Products` | Dimension | UnitsInStock moves with sales; rarely add a product |
+| `dbo.Orders` | **Fact** | Append new orders every run; ship previous runs' orders; trim oldest when above band |
+| `dbo.[Order Details]` | **Fact** | Append line items for the new orders (1–3 per order); deleted together with their order |
+| `dbo.Customers` | Dimension | Occasionally add a customer; occasionally update contact fields; delete only unreferenced customers when above band |
+| `dbo.Products` | Dimension | UnitsInStock moves with sales; rarely add a product; UnitPrice may drift; delete only unreferenced products when above band |
 | `dbo.Categories` | Dimension | Static reference data — do not touch |
 | `dbo.Suppliers` | Dimension | Static reference data — do not touch |
 | `dbo.Employees` | Dimension | Static reference data — do not touch |
@@ -48,8 +48,8 @@ The run interval is **1 hour**. To look like a live OLTP database:
 - Every new order gets 1–3 `[Order Details]` rows: existing `ProductID`s,
   `UnitPrice` = product's current `UnitPrice`, `Quantity` 1–30,
   `Discount` 0 in 85% of rows, otherwise 0.05/0.10/0.15.
-- Never delete or rewrite fact rows older than the current run. Facts are
-  append-only.
+- Never rewrite fact rows older than the current run, except the
+  shipments above and the trimming below.
 
 ## Live-timing rules (dimensions)
 
@@ -60,13 +60,70 @@ The run interval is **1 hour**. To look like a live OLTP database:
   `UnitsOnOrder = 0`).
 - `Customers`: add 0–1 new customers per run (some runs none). New
   `CustomerID` = 5 uppercase letters derived from the company name.
+- On 0–2 existing customers per run, update a contact field:
+  `ContactName`, `ContactTitle`, `Phone`, or `City`. Respect column
+  lengths and NOT NULLs.
 - `Products`: on roughly every 10th run add one product to an existing
-  category/supplier.
+  category/supplier. `UnitPrice` may drift ±2% on any run (UPDATE at
+  most 2 products per run).
 - All other dimension tables are static seed/reference data.
+
+## Size bands (min–max rows)
+
+The database feeds a DWH import and must not grow without limit. At the
+END of every run, check each table against its band and trim when above
+the max. Never trim below the min.
+
+| Table | Min | Max |
+|---|---|---|
+| `dbo.Orders` | 5,000 | 20,000 |
+| `dbo.[Order Details]` | (follows Orders) | (follows Orders) |
+| `dbo.Customers` | 100 | 500 |
+| `dbo.Products` | 77 | 300 |
+
+Trimming rules — **dependencies first, children before parents**:
+
+- Facts: delete the oldest `[Order Details]` rows together with their
+  `Orders` row (details first, then the order), oldest `OrderDate`
+  first, until the `Orders` count is back at the max. Never delete
+  rows created in this run.
+- Dimensions: a row is deletable only when NOTHING references it —
+  check every FK that can point at it:
+  - `dbo.Customers`: no `Orders` with that `CustomerID`.
+  - `dbo.Products`: no `[Order Details]` with that `ProductID`.
+- Never delete dimension rows created in this run, and stop as soon as
+  the table is back at its max — do not over-delete.
+- Static reference tables are never trimmed.
+
+## Edge cases (DWH import testing)
+
+On 0–2 of the rows you insert or update per run, deliberately use a
+boundary value from this catalogue. Rotate through it over runs so
+every column gets exercised. Hard limits: never violate PK/FK/NOT
+NULL/CHECK, never put edge values into FK columns, keep fact
+timestamps inside the live window.
+
+- Max-length strings: `CompanyName`/`ShipName` exactly 40 chars,
+  `ContactName`/`ContactTitle` exactly 30, `ProductName` exactly 40,
+  `QuantityPerUnit` exactly 20, `City`/`Country`/`ShipCountry` exactly
+  15, `Phone` exactly 24.
+- Unicode (always `N''` literals): accented and non-Latin names —
+  `N'Björk'`, `N'Guðmundsdóttir'`, `N'José'`, `N'北京'`, `N'Москва'`.
+- Apostrophes in names, properly escaped: `N'O''Brien'`, `N'D''Angelo'`.
+- Numeric extremes: `Quantity` 1 or 30, `Discount` exactly 0.15,
+  `UnitPrice` 0.00 (free product) or a large MONEY value like
+  99999.99, `UnitsInStock` at the SMALLINT ceiling 32767 on a restock,
+  `Freight` exactly 4.00 or 90.00.
+- Dates: `OrderDate` one second after the window opens
+  (`now - 65 minutes`); a `ShippedDate` exactly equal to its
+  `OrderDate` when shipping.
+- NULLs in nullable columns: `ContactName`, `ContactTitle`, `Phone`,
+  `ShippedDate` (unshipped orders only).
 
 ## Integrity rules
 
-- FKs are enforced: insert `Orders` before `[Order Details]`.
+- FKs are enforced: insert `Orders` before `[Order Details]`, and delete
+  `[Order Details]` before `Orders`.
 - `CustomerID`, `EmployeeID`, `ShipVia`, `ProductID` must reference
   existing parent rows.
 - `[Order Details]` PK is (`OrderID`, `ProductID`) — one row per product

@@ -26,8 +26,8 @@ data:
     `openclaw agent --local --deliver` turn. The agent reads the
     mocking manuals at `~/.openclaw/workspace/MOCK/MOCK-*.md`,
     mocks both databases via `sqlcmd`, and delivers a summary to the
-    main session's channel: rows created this run, grouped by
-    database → fact/dimension → table, or the failure with the SQL
+    main session's channel: rows inserted, updated and deleted this
+    run, grouped by database → fact/dimension → table, or the failure with the SQL
     error message.
 
     **Concurrency:** a mkdir lock at `~/.openclaw/.mock-lock/` prevents
