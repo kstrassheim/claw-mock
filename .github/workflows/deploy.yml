@@ -33,8 +33,10 @@ env:
   REGISTRY: clwmockdevdev1.azurecr.io
   ACR_NAME: clwmockdevdev1
   IMAGE_NAME: openclaw/claw-mock
-  # public identifiers, NOT secrets. Auth is OIDC federation
-  # (subject: repo:kstrassheim/claw-mock:environment:dev).
+  # public identifiers, NOT secrets. Auth is OIDC federation on the
+  # deploy-claw-mock-dev managed identity (subject:
+  # repo:kstrassheim@35608676/claw-mock@1313903993:environment:dev —
+  # GitHub now embeds the org/repo numeric IDs in the OIDC `sub`).
 
 permissions:
   id-token: write
