@@ -6,7 +6,7 @@
 
 env                  = "dev"
 cluster_name         = "claw-mock-aks"
-location             = "westeurope"
+location             = "northeurope"
 node_size            = "Standard_D2pds_v5"
 node_count           = 1
 storage_account_name = "clwmockdev" # PV storage (Azure Files), globally unique, NOT mytofustates
