@@ -70,6 +70,28 @@ variable "sql_admin_group_name" {
   default     = "local-data-admins-claw-mock-dev"
 }
 
+variable "sql_identity_name" {
+  description = <<-EOT
+    Name of the pre-existing user-assigned managed identity attached to the
+    Azure SQL server. It must already hold Directory.Read on the tenant —
+    that is what lets the server resolve Entra principals for
+    `CREATE USER ... FROM EXTERNAL PROVIDER`. Referenced via a data source;
+    Terraform never creates or modifies it.
+  EOT
+  type        = string
+  default     = "claw-code-mi-sqlserver-dev"
+}
+
+variable "pod_identity_name" {
+  description = <<-EOT
+    Name of the managed identity the claw-mock pod authenticates as via AKS
+    workload identity. init-sql-permissions.sql grants this principal access
+    inside each database; the deploy pipeline substitutes it into the script.
+  EOT
+  type        = string
+  default     = "deploy-claw-mock-dev"
+}
+
 variable "unique_suffix" {
   description = "Unique suffix appended to globally-unique resource names (max 4 chars, e.g. 'dev1'). Used to make the ACR name unique across deployments."
   type        = string

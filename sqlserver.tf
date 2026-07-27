@@ -24,6 +24,21 @@ resource "azurerm_mssql_server" "sql" {
     azuread_authentication_only = true
   }
 
+  # The server needs its own identity with Directory.Read to resolve Entra
+  # principals. Without it, `CREATE USER [...] FROM EXTERNAL PROVIDER` in
+  # init-sql-permissions.sql fails with "Principal ... not found in the
+  # directory" — the server cannot look the principal up on its own.
+  #
+  # claw-code-mi-sqlserver-dev is pre-existing and already holds that
+  # directory permission, so it is referenced via a data source rather than
+  # created here (same rule as the deploy identity and the Entra groups).
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.sql_identity.id]
+  }
+
+  primary_user_assigned_identity_id = data.azurerm_user_assigned_identity.sql_identity.id
+
   tags = {
     environment = var.env
     project     = "claw-mock"
@@ -105,4 +120,13 @@ output "sql_server_fqdn" {
 output "sql_databases" {
   description = "Mock databases on the SQL server"
   value       = [azurerm_mssql_database.adventureworks.name, azurerm_mssql_database.northwind.name]
+}
+
+# Consumed by the "Grant pod identity on databases" step in deploy.yml, which
+# substitutes it into the __POD_IDENTITY_NAME__ placeholder of
+# init-sql-permissions.sql. Exported rather than hardcoded in the workflow so
+# the identity is defined in exactly one place.
+output "pod_identity_name" {
+  description = "Display name of the managed identity the claw-mock pod authenticates as"
+  value       = data.azurerm_user_assigned_identity.deploy_identity.name
 }

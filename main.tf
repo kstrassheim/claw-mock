@@ -56,3 +56,11 @@ data "azurerm_user_assigned_identity" "deploy_identity" {
   name                = "deploy-claw-mock-dev"
   resource_group_name = data.azurerm_resource_group.rg.name
 }
+
+# Identity assigned to the Azure SQL server itself (not to any workload).
+# Pre-existing and already granted Directory.Read, which is what lets the
+# server resolve Entra principals for CREATE USER ... FROM EXTERNAL PROVIDER.
+data "azurerm_user_assigned_identity" "sql_identity" {
+  name                = var.sql_identity_name
+  resource_group_name = data.azurerm_resource_group.rg.name
+}

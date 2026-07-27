@@ -111,6 +111,41 @@ jobs:
       - name: Upload Terraform Output
         run: terraform output -json > terraform_output.json
 
+      # Database-level access for the pod's managed identity. This cannot be
+      # expressed in Terraform — on an Entra-only server it is T-SQL run
+      # against each database — so it lives in init-sql-permissions.sql and
+      # runs here, immediately after apply, before anything tries to use the
+      # databases.
+      #
+      # The script ships with a __POD_IDENTITY_NAME__ placeholder; the real
+      # identity comes from the terraform output so it is defined in one place.
+      # Runs as the deploy identity, which is a member of the server's Entra
+      # admin group, and depends on the server's user-assigned identity
+      # (claw-code-mi-sqlserver-dev) for the directory lookup.
+      - name: Grant pod identity on databases
+        run: |
+          set -euo pipefail
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' terraform_output.json)
+          POD_IDENTITY=$(jq -r '.pod_identity_name.value' terraform_output.json)
+          if [ -z "$POD_IDENTITY" ] || [ "$POD_IDENTITY" = "null" ]; then
+            echo "::error::pod_identity_name missing from terraform output"
+            exit 1
+          fi
+
+          curl -sSL https://packages.microsoft.com/keys/microsoft.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq sqlcmd
+
+          for DB in $(jq -r '.sql_databases.value[]' terraform_output.json); do
+            echo "::group::Granting $POD_IDENTITY on $DB"
+            sed "s/__POD_IDENTITY_NAME__/${POD_IDENTITY}/g" \
+              init-sql-permissions.sql > "/tmp/init-${DB}.sql"
+            sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
+              --authentication-method ActiveDirectoryDefault \
+              -i "/tmp/init-${DB}.sql"
+            echo "::endgroup::"
+          done
+
       - name: Upload Terraform Output artifact
         uses: actions/upload-artifact@v6
         with:
