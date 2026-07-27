@@ -302,21 +302,38 @@ jobs:
             -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 \
             -Q "CREATE DATABASE [AdventureWorks]; CREATE DATABASE [Northwind];"
 
+      # The dacpacs target SqlAzure (the real deploy target is Azure SQL);
+      # the dind container is on-prem SQL Server 2022. DacFx refuses that
+      # cross-platform publish unless AllowIncompatiblePlatform is set —
+      # this only relaxes the *engine* check inside the ephemeral test, the
+      # dacpac still deploys its full schema + seed script, which is the gate.
       - name: Publish AdventureWorks dacpac
         run: |
-          sqlpackage /a:Publish \
+          ls -la /tmp/dacpacs
+          command -v sqlpackage
+          if ! sqlpackage /a:Publish \
             /sf:/tmp/dacpacs/AdventureWorks.dacpac \
             /tsn:localhost,1433 /tdn:AdventureWorks \
             /tu:sa /tp:"$SA_PASSWORD" \
-            /p:TrustServerCertificate=True
+            /p:TrustServerCertificate=True \
+            /p:AllowIncompatiblePlatform=True; then
+            echo "::error::AdventureWorks dacpac publish failed — last mssql log lines:"
+            docker logs mssql 2>&1 | tail -40
+            exit 1
+          fi
 
       - name: Publish Northwind dacpac
         run: |
-          sqlpackage /a:Publish \
+          if ! sqlpackage /a:Publish \
             /sf:/tmp/dacpacs/Northwind.dacpac \
             /tsn:localhost,1433 /tdn:Northwind \
             /tu:sa /tp:"$SA_PASSWORD" \
-            /p:TrustServerCertificate=True
+            /p:TrustServerCertificate=True \
+            /p:AllowIncompatiblePlatform=True; then
+            echo "::error::Northwind dacpac publish failed — last mssql log lines:"
+            docker logs mssql 2>&1 | tail -40
+            exit 1
+          fi
 
       - name: Verify seed data (AdventureWorks)
         run: |
