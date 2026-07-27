@@ -16,3 +16,7 @@ tfplan
 .DS_Store
 Thumbs.db
 .vs/
+
+# sqlpackage/dotnet crash dumps
+core
+**/core

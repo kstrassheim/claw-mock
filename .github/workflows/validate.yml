@@ -307,15 +307,19 @@ jobs:
       # cross-platform publish unless AllowIncompatiblePlatform is set —
       # this only relaxes the *engine* check inside the ephemeral test, the
       # dacpac still deploys its full schema + seed script, which is the gate.
+      #
+      # TrustServerCertificate is a *connection-string* setting, not a
+      # DacFx publish property: sqlpackage 170 aborts instantly with
+      # "'TrustServerCertificate' is not a valid argument" when passed as
+      # /p:. It must go inside /tcs: (the container uses a self-signed
+      # cert, and Microsoft.Data.SqlClient defaults to Encrypt=True).
       - name: Publish AdventureWorks dacpac
         run: |
           ls -la /tmp/dacpacs
           command -v sqlpackage
           if ! sqlpackage /a:Publish \
             /sf:/tmp/dacpacs/AdventureWorks.dacpac \
-            /tsn:localhost,1433 /tdn:AdventureWorks \
-            /tu:sa /tp:"$SA_PASSWORD" \
-            /p:TrustServerCertificate=True \
+            /tcs:"Server=localhost,1433;Initial Catalog=AdventureWorks;User ID=sa;Password=${SA_PASSWORD};TrustServerCertificate=True" \
             /p:AllowIncompatiblePlatform=True; then
             echo "::error::AdventureWorks dacpac publish failed — last mssql log lines:"
             docker logs mssql 2>&1 | tail -40
@@ -326,9 +330,7 @@ jobs:
         run: |
           if ! sqlpackage /a:Publish \
             /sf:/tmp/dacpacs/Northwind.dacpac \
-            /tsn:localhost,1433 /tdn:Northwind \
-            /tu:sa /tp:"$SA_PASSWORD" \
-            /p:TrustServerCertificate=True \
+            /tcs:"Server=localhost,1433;Initial Catalog=Northwind;User ID=sa;Password=${SA_PASSWORD};TrustServerCertificate=True" \
             /p:AllowIncompatiblePlatform=True; then
             echo "::error::Northwind dacpac publish failed — last mssql log lines:"
             docker logs mssql 2>&1 | tail -40
