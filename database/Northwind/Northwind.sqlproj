@@ -4,12 +4,12 @@
 
   Build the dacpac:
     dotnet build Northwind.sqlproj -c Release
-    -> bin/Release/Northwind.dacpac
+    -> bin/Release/net8.0/Northwind.dacpac
 
   Deploy locally (VS Code "SQL Database Projects" extension, or CLI).
   The target Azure SQL server is Entra-only — authenticate with Entra:
     sqlpackage /a:Publish \
-      /sf:bin/Release/Northwind.dacpac \
+      /sf:bin/Release/net8.0/Northwind.dacpac \
       /tsn:<server> /tdn:Northwind \
       /p:Authentication="Active Directory Default"
   (For a local/dind SQL Server without Entra, classic SQL auth works too:

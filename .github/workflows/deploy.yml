@@ -192,7 +192,7 @@ jobs:
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
-            /sf:database/AdventureWorks/bin/Release/AdventureWorks.dacpac \
+            /sf:database/AdventureWorks/bin/Release/net8.0/AdventureWorks.dacpac \
             /tsn:"$SQL_FQDN",1433 /tdn:AdventureWorks \
             /p:Authentication="Active Directory Default" \
             /p:Encrypt=True
@@ -202,7 +202,7 @@ jobs:
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
-            /sf:database/Northwind/bin/Release/Northwind.dacpac \
+            /sf:database/Northwind/bin/Release/net8.0/Northwind.dacpac \
             /tsn:"$SQL_FQDN",1433 /tdn:Northwind \
             /p:Authentication="Active Directory Default" \
             /p:Encrypt=True

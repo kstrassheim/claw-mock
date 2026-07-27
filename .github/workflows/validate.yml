@@ -158,13 +158,21 @@ jobs:
       - name: Build Northwind dacpac
         run: dotnet build database/Northwind/Northwind.sqlproj -c Release
 
+      - name: Stage dacpacs
+        # MSBuild.Sdk.SqlProj emits into bin/<Config>/<TargetFramework>/,
+        # not bin/<Config>/. Stage into a flat dir so the artifact holds
+        # the two dacpacs at its root.
+        run: |
+          mkdir -p artifacts/dacpacs
+          cp database/AdventureWorks/bin/Release/net8.0/AdventureWorks.dacpac artifacts/dacpacs/
+          cp database/Northwind/bin/Release/net8.0/Northwind.dacpac artifacts/dacpacs/
+
       - name: Upload dacpac artifacts
         uses: actions/upload-artifact@v6
         with:
           name: dacpacs
-          path: |
-            database/AdventureWorks/bin/Release/AdventureWorks.dacpac
-            database/Northwind/bin/Release/Northwind.dacpac
+          path: artifacts/dacpacs
+          if-no-files-found: error
           retention-days: 7
 
   dacpac-deploy-test:

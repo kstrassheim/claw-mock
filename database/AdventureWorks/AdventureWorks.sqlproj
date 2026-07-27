@@ -4,12 +4,12 @@
 
   Build the dacpac:
     dotnet build AdventureWorks.sqlproj -c Release
-    -> bin/Release/AdventureWorks.dacpac
+    -> bin/Release/net8.0/AdventureWorks.dacpac
 
   Deploy locally (VS Code "SQL Database Projects" extension, or CLI).
   The target Azure SQL server is Entra-only — authenticate with Entra:
     sqlpackage /a:Publish \
-      /sf:bin/Release/AdventureWorks.dacpac \
+      /sf:bin/Release/net8.0/AdventureWorks.dacpac \
       /tsn:<server> /tdn:AdventureWorks \
       /p:Authentication="Active Directory Default"
   (For a local/dind SQL Server without Entra, classic SQL auth works too:
