@@ -8,7 +8,7 @@ bot at the start of every hourly mock run (mounted into the pod at
 
 ```bash
 sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_ADVENTUREWORKS}" \
-       -G --authentication-method=ActiveDirectoryDefault -l 30 -N -C
+       --authentication-method=ActiveDirectoryDefault -l 30 -N -C
 ```
 
 (Entra-only server — the bot authenticates via Azure Workload Identity

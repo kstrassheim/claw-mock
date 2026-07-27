@@ -46,10 +46,10 @@ Connect like this:
 
 ```bash
 sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_ADVENTUREWORKS}" \
-       -G --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
+       --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
 ```
 
-`-G --authentication-method=ActiveDirectoryDefault` picks up the
+`--authentication-method=ActiveDirectoryDefault` picks up the
 workload-identity token via the DefaultAzureCredential chain.
 `-N -C` = encrypt + trust server certificate (Azure SQL terminates TLS
 with its own cert chain).

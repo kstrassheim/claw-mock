@@ -59,9 +59,17 @@ variable "namespace" {
 }
 
 variable "aks_admin_group_name" {
-  description = "Display name of the Entra ID security group granted AKS cluster-admin RBAC. The group must already exist; Terraform only references it by name. Defaults to the SQL data-admins group because it is the only pre-existing group for this project (its members — cameron-howe and deploy-claw-mock-dev — then also get cluster-admin for kubelogin access). Point this at a dedicated claw-mock-aks-admin group later if you want to split the duties."
+  description = <<-EOT
+    Display name of the Entra security group granted AKS cluster-admin RBAC.
+    The group must already exist; Terraform only references it by name.
+
+    This is now the dedicated claw-mock-aks-admin group rather than the SQL
+    data-admins group, so cluster administration and database administration
+    are separate duties. Members of this group get cluster-admin via
+    azure_rbac_enabled — without it there is no way in to the cluster.
+  EOT
   type        = string
-  default     = "local-data-admins-claw-mock-dev"
+  default     = "claw-mock-aks-admin"
 }
 
 variable "sql_admin_group_name" {

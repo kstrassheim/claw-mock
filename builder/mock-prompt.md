@@ -21,11 +21,15 @@ injected the token file into your pod; no password exists):
 
 ```bash
 sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_ADVENTUREWORKS}" \
-       -G --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
+       --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
 ```
 
 Swap `${SQL_DB_ADVENTUREWORKS}` for `${SQL_DB_NORTHWIND}` for the other
 database.
+
+Do not add `-G`. go-sqlcmd rejects it alongside `--authentication-method`
+("The -G and the --authentication-method options are mutually exclusive")
+and the connection fails before it is attempted.
 
 ## Rules
 
