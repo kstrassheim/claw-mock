@@ -122,7 +122,9 @@ jobs:
       # Runs as the deploy identity, which is a member of the server's Entra
       # admin group, and depends on the server's user-assigned identity
       # (claw-code-mi-sqlserver-dev) for the directory lookup.
-      - name: Grant pod identity on databases
+      - name: Grant pod identity on server and databases
+        env:
+          SQLCMD_VERSION: '1.8.2'
         run: |
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' terraform_output.json)
@@ -132,16 +134,30 @@ jobs:
             exit 1
           fi
 
-          curl -sSL https://packages.microsoft.com/keys/microsoft.asc \
-            | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc >/dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq sqlcmd
+          # go-sqlcmd from its GitHub release. The `sqlcmd` apt package is not
+          # in the runner's default sources (adding only the Microsoft signing
+          # key is not enough — that failed with "Unable to locate package").
+          mkdir -p "$HOME/.local/bin"
+          curl -sSLf -o /tmp/sqlcmd.tar.bz2 \
+            "https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2"
+          tar xjf /tmp/sqlcmd.tar.bz2 -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/sqlcmd"
+          export PATH="$HOME/.local/bin:$PATH"
+          sqlcmd --version
 
-          for DB in $(jq -r '.sql_databases.value[]' terraform_output.json); do
+          # master first (server-level user), then every mock database
+          # (db_datawriter + db_datareader). Authentication is
+          # ActiveDirectoryDefault, which picks up the azure/login OIDC session
+          # above — i.e. the deploy identity, which is admin on this server via
+          # the local-data-admins-claw-mock-dev group.
+          DBS="master $(jq -r '.sql_databases.value | join(" ")' terraform_output.json)"
+          for DB in $DBS; do
             echo "::group::Granting $POD_IDENTITY on $DB"
             sed "s/__POD_IDENTITY_NAME__/${POD_IDENTITY}/g" \
               init-sql-permissions.sql > "/tmp/init-${DB}.sql"
             sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
               --authentication-method ActiveDirectoryDefault \
+              --exit-on-error \
               -i "/tmp/init-${DB}.sql"
             echo "::endgroup::"
           done
