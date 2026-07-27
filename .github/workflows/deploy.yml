@@ -1,0 +1,362 @@
+name: Deploy (Push to main)
+
+# Runs on every merge to main. Five jobs:
+#   1. check-minimax-secret  — fail-fast if MINIMAX_API_KEY is not set
+#   2. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
+#   3. dacpac-build-deploy   — build both dacpacs and publish them onto the
+#                              Azure SQL server (schema + seed + bot user)
+#   4. build-and-push-image  — build the claw-mock image, push :latest+:sha
+#   5. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
+#
+# Each job depends on the previous one succeeding (`needs:`), so a broken
+# step short-circuits the rest before it can do damage.
+#
+# `workflow_dispatch` exists for the initial bootstrap: the very first
+# apply creates the AKS cluster that later terraform-plan runs rely on.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'builder/**'
+      - 'database/**'
+      - 'k8s/**'
+      - 'VERSIONS'
+      - 'MOCKING-*.md'
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: clwmockdevdev1.azurecr.io
+  ACR_NAME: clwmockdevdev1
+  IMAGE_NAME: openclaw/claw-mock
+  # public identifiers, NOT secrets. Auth is OIDC federation
+  # (subject: repo:kstrassheim/claw-mock:environment:dev).
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check-minimax-secret:
+    # openclaw in claw-mock runs on MiniMax M3 ONLY — no fallback
+    # providers exist. Refuse to deploy without the key.
+    name: MINIMAX_API_KEY configured
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: Check MINIMAX_API_KEY
+        env:
+          MINIMAX: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          if [ -z "$MINIMAX" ]; then
+            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
+            exit 1
+          fi
+          echo "OK — MINIMAX_API_KEY is configured."
+
+  terraform-apply:
+    name: Terraform Apply
+    needs: check-minimax-secret
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read TERRAFORM_VERSION from /VERSIONS
+        id: tfver
+        run: |
+          echo "version=$(grep '^TERRAFORM_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials for kubernetes/helm providers
+        # On the very first run the cluster does not exist yet — the
+        # kubernetes provider config file is created empty and the k8s
+        # resources are expected to fail plan/apply on that first run.
+        # Re-run this job once the cluster exists (workflow_dispatch).
+        run: |
+          if az aks show --resource-group claw-mock-dev --name claw-mock-aks -o none 2>/dev/null; then
+            az aks get-credentials \
+              --resource-group claw-mock-dev \
+              --name claw-mock-aks \
+              --file /tmp/kubeconfig_clawmock \
+              --admin
+          else
+            echo "::notice::AKS cluster claw-mock-aks does not exist yet (first bootstrap run) — skipping kubeconfig fetch"
+          fi
+
+      - name: Set Terraform environment variables
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_AZUREAD_AUTH=true" >> $GITHUB_ENV
+          echo "TF_VAR_env=dev" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=terraform" \
+            -backend-config="storage_account_name=mytofustates" \
+            -backend-config="container_name=claw-mock" \
+            -backend-config="key=dev.tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Upload Terraform Output
+        run: terraform output -json > terraform_output.json
+
+      - name: Upload Terraform Output artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: terraform-output
+          path: terraform_output.json
+          retention-days: 30
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  dacpac-build-deploy:
+    # After terraform: build both .sqlproj into dacpacs and publish them
+    # onto the Azure SQL server — schema, FKs, post-deployment seed data
+    # and the contained `clawmockbot` user (password from TF state).
+    # The deploy identity is a member of the SQL Entra-admin group, so
+    # sqlpackage authenticates as "Active Directory Default" (az login).
+    name: Dacpac Build + Deploy to Azure SQL
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build AdventureWorks dacpac
+        run: dotnet build database/AdventureWorks/AdventureWorks.sqlproj -c Release
+
+      - name: Build Northwind dacpac
+        run: dotnet build database/Northwind/Northwind.sqlproj -c Release
+
+      - name: Install sqlpackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage
+          echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
+
+      - name: Download Terraform Output artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: terraform-output
+          path: /tmp/tfout
+
+      - name: Publish AdventureWorks dacpac
+        run: |
+          set -euo pipefail
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          BOT_PW=$(jq -r '.bot_sql_password.value' /tmp/tfout/terraform_output.json)
+          sqlpackage /a:Publish \
+            /sf:database/AdventureWorks/bin/Release/AdventureWorks.dacpac \
+            /tsn:"$SQL_FQDN",1433 /tdn:AdventureWorks \
+            /p:Authentication="Active Directory Default" \
+            /p:Encrypt=True \
+            /v:BotPassword="$BOT_PW"
+
+      - name: Publish Northwind dacpac
+        run: |
+          set -euo pipefail
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          BOT_PW=$(jq -r '.bot_sql_password.value' /tmp/tfout/terraform_output.json)
+          sqlpackage /a:Publish \
+            /sf:database/Northwind/bin/Release/Northwind.dacpac \
+            /tsn:"$SQL_FQDN",1433 /tdn:Northwind \
+            /p:Authentication="Active Directory Default" \
+            /p:Encrypt=True \
+            /v:BotPassword="$BOT_PW"
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  build-and-push-image:
+    name: Build and Push Docker image to ACR
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR (needed to pull the openclaw-base image)
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure openclaw-base is mirrored from GHCR into ACR
+        # The Dockerfile's FROM points at our ACR, so the base must exist
+        # there before any build can resolve it.
+        run: |
+          set -euo pipefail
+          OPENCLAW_UPSTREAM=$(grep '^OPENCLAW_UPSTREAM=' VERSIONS | cut -d= -f2)
+          SRC_TAG="${OPENCLAW_UPSTREAM#v}"
+          if az acr repository show \
+               --name ${{ env.ACR_NAME }} \
+               --image "openclaw/openclaw-base:${OPENCLAW_UPSTREAM}" >/dev/null 2>&1; then
+            echo "openclaw/openclaw-base:${OPENCLAW_UPSTREAM} already present in ACR — skipping import"
+          else
+            az acr import \
+              --name ${{ env.ACR_NAME }} \
+              --source "ghcr.io/openclaw/openclaw:${SRC_TAG}" \
+              --image "openclaw/openclaw-base:${OPENCLAW_UPSTREAM}"
+          fi
+
+      - name: Read version pins from /VERSIONS
+        id: version
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${{ github.sha }}"
+          echo "short_sha=${SHORT_SHA:0:8}" >> $GITHUB_OUTPUT
+          for key in OPENCLAW_UPSTREAM KUBECTL_VERSION SQLCMD_VERSION; do
+            echo "${key}=$(grep "^${key}=" VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          done
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./builder
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.short_sha }}
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/openclaw/openclaw-base:${{ steps.version.outputs.OPENCLAW_UPSTREAM }}
+            KUBECTL_VERSION=${{ steps.version.outputs.KUBECTL_VERSION }}
+            SQLCMD_VERSION=${{ steps.version.outputs.SQLCMD_VERSION }}
+          platforms: linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  deploy-to-aks:
+    name: Deploy to AKS (apply manifests + rollout)
+    needs: [build-and-push-image, dacpac-build-deploy]
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      KUBECONFIG: /tmp/kubeconfig
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group claw-mock-dev \
+            --name claw-mock-aks \
+            --file /tmp/kubeconfig \
+            --admin
+
+      - name: Install kubectl
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          mkdir -p "$HOME/.local/bin"
+          KUBECTL_VERSION="$(curl -sL https://dl.k8s.io/release/stable.txt)"
+          curl -sLo "$HOME/.local/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
+          chmod +x "$HOME/.local/bin/kubectl"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Apply k8s/ manifests
+        # `-f k8s/` is non-recursive: the markdown files under k8s/tools/
+        # are skipped here (they're not YAML manifests). The next steps
+        # assemble them into ConfigMaps via `kubectl create --from-file`.
+        run: kubectl apply -f k8s/
+
+      - name: Build and apply claw-mock-tools-md ConfigMap from k8s/tools/
+        run: |
+          set -euo pipefail
+          kubectl create configmap claw-mock-tools-md \
+            --namespace claw-mock \
+            --from-file=TOOLS.md=k8s/tools/TOOLS.md \
+            --dry-run=client -o yaml \
+          | kubectl apply -f -
+
+      - name: Build and apply mocking-manuals ConfigMap from /MOCKING-*.md
+        run: |
+          set -euo pipefail
+          kubectl create configmap claw-mock-mocking-manuals \
+            --namespace claw-mock \
+            --from-file=MOCKING-AdventureWorks.md \
+            --from-file=MOCKING-Northwind.md \
+            --dry-run=client -o yaml \
+          | kubectl apply -f -
+
+      - name: Roll out claw-mock deployment to pick up new :latest image
+        run: |
+          kubectl rollout restart deployment/claw-mock -n claw-mock
+          kubectl rollout status   deployment/claw-mock -n claw-mock --timeout=15m
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true

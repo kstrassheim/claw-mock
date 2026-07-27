@@ -56,7 +56,7 @@ provider "helm" {
 data "azurerm_client_config" "current" {}
 
 locals {
-  resource_group_name  = "claw-mock"
+  resource_group_name  = "claw-mock-dev"
   cluster_name         = var.cluster_name
   location             = var.location
   storage_account_name = var.storage_account_name

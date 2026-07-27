@@ -83,7 +83,7 @@ jobs:
       - name: Get AKS credentials for kubernetes/helm providers
         run: |
           az aks get-credentials \
-            --resource-group claw-mock \
+            --resource-group claw-mock-dev \
             --name claw-mock-aks \
             --file /tmp/kubeconfig_clawmock \
             --admin
