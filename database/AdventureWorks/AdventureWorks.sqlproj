@@ -21,6 +21,9 @@
 <Project Sdk="MSBuild.Sdk.SqlProj/3.1.1">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
+    <!-- SqlProj builds no ref assembly; without this the .NET 8 SDK
+         CopyRefAssembly task fails with MSB4044 (empty SourcePath). -->
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <SqlServerVersion>SqlAzure</SqlServerVersion>
     <RunSqlCodeAnalysis>False</RunSqlCodeAnalysis>
   </PropertyGroup>
