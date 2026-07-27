@@ -1,12 +1,14 @@
 name: Deploy (Push to main)
 
-# Runs on every merge to main. Five jobs:
+# Runs on every merge to main. Six jobs:
 #   1. check-minimax-secret  — fail-fast if MINIMAX_API_KEY is not set
 #   2. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
 #   3. dacpac-build-deploy   — build both dacpacs and publish them onto the
 #                              Azure SQL server (schema + seed data)
 #   4. build-and-push-image  — build the claw-mock image, push :latest+:sha
-#   5. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
+#   5. apply-secrets         — render claw-mock-secrets from the GitHub env
+#                              secrets and kubectl-apply them to the cluster
+#   6. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
 #
 # Each job depends on the previous one succeeding (`needs:`), so a broken
 # step short-circuits the rest before it can do damage.
@@ -286,9 +288,87 @@ jobs:
           az logout
           rm -rf ~/.azure 2>/dev/null || true
 
+  apply-secrets:
+    # Renders the claw-mock-secrets Secret from the GitHub Actions
+    # environment secrets and applies it to the AKS cluster. The manifest
+    # is piped straight from `kubectl create -o yaml` into
+    # `kubectl apply -f -`, so it never enters git.
+    #
+    # Lives inside deploy.yml (was the standalone seal-secrets.yml) because
+    # it is strictly downstream of the infrastructure: it needs the AKS
+    # cluster from terraform-apply, and must run BEFORE deploy-to-aks'
+    # rollout restart so the new pods come up with secrets present.
+    #
+    # The SQL connection secret (claw-mock-db) is NOT handled here — it
+    # is created by Terraform (sqlserver.tf), which owns its lifecycle.
+    #
+    # To re-apply after rotating a secret in the GitHub `dev`
+    # environment, re-run this workflow via workflow_dispatch.
+    name: Apply claw-mock-secrets to cluster
+    needs: [terraform-apply, build-and-push-image]
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      KUBECONFIG: /tmp/kubeconfig
+      RESOURCE_GROUP: claw-mock-dev
+      AKS_NAME: claw-mock-aks
+
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.AKS_NAME }} \
+            --file /tmp/kubeconfig \
+            --admin
+
+      - name: Install kubectl
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          mkdir -p "$HOME/.local/bin"
+          KUBECTL_VERSION="$(curl -sL https://dl.k8s.io/release/stable.txt)"
+          curl -sLo "$HOME/.local/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
+          chmod +x "$HOME/.local/bin/kubectl"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Apply claw-mock-secrets
+        env:
+          MINIMAX_API_KEY:         ${{ secrets.MINIMAX_API_KEY }}
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ENTRA_TENANT_ID:         ${{ secrets.ENTRA_TENANT_ID }}
+          ENTRA_USERNAME:          ${{ secrets.ENTRA_USERNAME }}
+          ENTRA_PASSWORD:          ${{ secrets.ENTRA_PASSWORD }}
+          ENTRA_TOTP_SEED:         ${{ secrets.ENTRA_TOTP_SEED }}
+        run: |
+          kubectl create secret generic claw-mock-secrets \
+            --namespace claw-mock \
+            --dry-run=client \
+            --from-literal=MINIMAX_API_KEY="$MINIMAX_API_KEY" \
+            --from-literal=TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            --from-literal=ENTRA_TENANT_ID="$ENTRA_TENANT_ID" \
+            --from-literal=ENTRA_USERNAME="$ENTRA_USERNAME" \
+            --from-literal=ENTRA_PASSWORD="$ENTRA_PASSWORD" \
+            --from-literal=ENTRA_TOTP_SEED="$ENTRA_TOTP_SEED" \
+            -o yaml \
+          | kubectl apply -f -
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
   deploy-to-aks:
     name: Deploy to AKS (apply manifests + rollout)
-    needs: [build-and-push-image, dacpac-build-deploy]
+    needs: [build-and-push-image, dacpac-build-deploy, apply-secrets]
     runs-on: ubuntu-latest
     environment: dev
     env:

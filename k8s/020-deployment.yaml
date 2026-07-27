@@ -144,7 +144,7 @@ spec:
             - configMapRef:
                 name: claw-mock-config
             # API keys + Entra credentials, applied by the
-            # seal-secrets workflow (ENTRA_*, MINIMAX_API_KEY,
+            # apply-secrets job in deploy.yml (ENTRA_*, MINIMAX_API_KEY,
             # TELEGRAM_BOT_TOKEN).
             - secretRef:
                 name: claw-mock-secrets
