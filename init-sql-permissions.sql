@@ -63,10 +63,25 @@ BEGIN
     -- updates rows. db_datareader is granted alongside it because the run has
     -- to read existing keys and row counts to generate referentially valid
     -- data and to report per-table counts afterwards.
-    ALTER ROLE db_datawriter ADD MEMBER [__POD_IDENTITY_NAME__];
-    ALTER ROLE db_datareader ADD MEMBER [__POD_IDENTITY_NAME__];
+    --
+    -- ALTER ROLE ... ADD MEMBER is already a no-op for an existing member, but
+    -- the membership is checked explicitly so a re-run states plainly what it
+    -- did or skipped instead of relying on that being silent.
+    IF IS_ROLEMEMBER(N'db_datawriter', N'__POD_IDENTITY_NAME__') = 0
+    BEGIN
+        ALTER ROLE db_datawriter ADD MEMBER [__POD_IDENTITY_NAME__];
+        PRINT 'Added [__POD_IDENTITY_NAME__] to db_datawriter on [' + DB_NAME() + ']';
+    END
+    ELSE
+        PRINT '[__POD_IDENTITY_NAME__] already in db_datawriter on [' + DB_NAME() + '] — skipping';
 
-    PRINT 'Granted db_datawriter + db_datareader on [' + DB_NAME() + '] to [__POD_IDENTITY_NAME__]';
+    IF IS_ROLEMEMBER(N'db_datareader', N'__POD_IDENTITY_NAME__') = 0
+    BEGIN
+        ALTER ROLE db_datareader ADD MEMBER [__POD_IDENTITY_NAME__];
+        PRINT 'Added [__POD_IDENTITY_NAME__] to db_datareader on [' + DB_NAME() + ']';
+    END
+    ELSE
+        PRINT '[__POD_IDENTITY_NAME__] already in db_datareader on [' + DB_NAME() + '] — skipping';
 END
 ELSE
 BEGIN
