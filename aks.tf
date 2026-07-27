@@ -20,30 +20,13 @@ resource "kubernetes_namespace" "claw-mock" {
   }
 }
 
-# =============================================================================
-# PV Storage Account
-# =============================================================================
-resource "azurerm_storage_account" "pv" {
-  name                       = local.storage_account_name
-  resource_group_name        = data.azurerm_resource_group.rg.name
-  location                   = local.location
-  account_tier               = "Standard"
-  account_replication_type   = "LRS"
-  min_tls_version            = "TLS1_2"
-  https_traffic_only_enabled = true
-
-  tags = {
-    environment = var.env
-    project     = "claw-mock"
-  }
-}
-
-# Create a file share in the storage account (for K8s PV)
-resource "azurerm_storage_share" "claw_mock" {
-  name               = "claw-mock"
-  storage_account_id = azurerm_storage_account.pv.id
-  quota              = 50 # 50 GiB
-}
+# The storage account and Azure Files share that used to live here were
+# removed: nothing mounted them. k8s/005-pvc.yaml pins
+# storageClassName: default, so AKS dynamically provisions a managed disk for
+# claw-mock-workspace and the file share sat unused and billed. If a
+# ReadWriteMany workspace is ever needed (more than one replica), reintroduce
+# them together with an azurefile StorageClass on the PVC — one without the
+# other is what created this.
 
 # =============================================================================
 # Azure Container Registry — for the custom claw-mock image
@@ -280,16 +263,6 @@ output "aks_cluster_name" {
 output "aks_fqdn" {
   description = "AKS cluster FQDN"
   value       = azurerm_kubernetes_cluster.aks.fqdn
-}
-
-output "storage_account_name" {
-  description = "PV storage account name (Entra-only auth, no keys)"
-  value       = azurerm_storage_account.pv.name
-}
-
-output "storage_share_name" {
-  description = "PV storage share name"
-  value       = azurerm_storage_share.claw_mock.name
 }
 
 output "kubeconfig" {

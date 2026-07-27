@@ -46,12 +46,6 @@ variable "node_count" {
   type        = number
 }
 
-variable "storage_account_name" {
-  description = "Storage account name for Azure Files PV (must be globally unique, ~24 chars max, e.g. clwmockdev)"
-  default     = "clwmockdev"
-  type        = string
-}
-
 variable "namespace" {
   description = "Kubernetes namespace for claw-mock"
   default     = "claw-mock"

@@ -8,12 +8,11 @@
 # =============================================================================
 
 locals {
-  resource_group_name  = "claw-mock-dev"
-  cluster_name         = var.cluster_name
-  location             = var.location
-  storage_account_name = var.storage_account_name
-  namespace            = var.namespace
-  aks_version          = "1.35.3"
+  resource_group_name = "claw-mock-dev"
+  cluster_name        = var.cluster_name
+  location            = var.location
+  namespace           = var.namespace
+  aks_version         = "1.35.3"
   # Renamed from "claw-mock-sql-${var.env}". The old name is stuck in an
   # Azure name-to-location reservation pointing at northeurope, left behind
   # by a create that failed there with ProvisioningDisabled. Every attempt to
