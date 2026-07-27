@@ -192,17 +192,17 @@ resource "kubernetes_network_policy_v1" "allow_dns" {
             "kubernetes.io/metadata.name" = "kube-system"
           }
         }
-        ports {
-          protocol = "UDP"
-          port     = "53"
-        }
-        ports {
-          protocol = "TCP"
-          port     = "53"
-        }
       }
-      policy_types = ["Egress"]
+      ports {
+        protocol = "UDP"
+        port     = "53"
+      }
+      ports {
+        protocol = "TCP"
+        port     = "53"
+      }
     }
+    policy_types = ["Egress"]
   }
 }
 
