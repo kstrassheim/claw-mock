@@ -1,0 +1,22 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.example.tfvars
+crash.log
+tfplan
+
+# SQL database projects (MSBuild.Sdk.SqlProj)
+**/bin/
+**/obj/
+*.dacpac
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vs/
+
+# sqlpackage/dotnet crash dumps
+core
+**/core

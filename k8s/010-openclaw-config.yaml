@@ -1,0 +1,155 @@
+---
+# Single source of truth for the openclaw runtime config.
+#
+# MiniMax M3 is the ONLY model provider. The issue for this project
+# explicitly rules out Mistral and Moonshot keys, so there is no
+# provider-stripping fallback logic here: the render-config init
+# container in 020-deployment.yaml fails the pod if MINIMAX_API_KEY is
+# missing, and the validate/deploy pipelines fail even earlier.
+#
+# No MCP servers are wired — this bot mocks databases, it does not push
+# code. GitHub access (and its token) is deliberately not configured.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claw-mock-config-template
+  namespace: claw-mock
+data:
+  openclaw.json: |
+    {
+      "agents": {
+        "defaults": {
+          "model": {
+            "primary": "minimax/MiniMax-M3"
+          },
+          "imageModel": {
+            "primary": "minimax/MiniMax-M3"
+          },
+          "compaction": {
+            "mode": "safeguard"
+          },
+          "blockStreamingDefault": "on",
+          "thinkingDefault": "high",
+          "models": {
+            "minimax/MiniMax-M3": {}
+          },
+          "bootstrapMaxChars": 30000,
+          "bootstrapTotalMaxChars": 120000
+        }
+      },
+      "models": {
+        "providers": {
+          "minimax": {
+            "baseUrl": "https://api.minimax.io/anthropic",
+            "apiKey": "${MINIMAX_API_KEY}",
+            "api": "anthropic-messages",
+            "models": [
+              {"id": "MiniMax-M3", "name": "MiniMax M3", "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 131072, "params": {"num_ctx": 1000000}}
+            ]
+          }
+        }
+      },
+      "mcp": {
+        "servers": {}
+      },
+      "commands": {
+        "native": "auto",
+        "nativeSkills": "auto",
+        "restart": true,
+        "ownerDisplay": "raw"
+      },
+      "channels": {
+        "telegram": {"enabled": true}
+      },
+      "gateway": {
+        "port": 18789,
+        "mode": "local",
+        "bind": "lan",
+        "trustedProxies": ["10.0.0.0/8"],
+        "controlUi": {"allowedOrigins": ["*"]}
+      }
+    }
+---
+# Placeholder — populated at pod start by the render-config init container.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claw-mock-config
+  namespace: claw-mock
+data:
+  openclaw.json: "{}"
+---
+# Script the init container runs. Lives in its own ConfigMap so changes
+# don't force the claw-mock-config ConfigMap to be recreated.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claw-mock-render-scripts
+  namespace: claw-mock
+data:
+  render-config.sh: |
+    #!/bin/sh
+    set -eu
+
+    # MiniMax is the only provider. Treat the placeholder string (from a
+    # sealed-secret stub) the same as "unset" so we don't boot with
+    # garbage credentials.
+    if [ -z "${MINIMAX_API_KEY:-}" ] || [ "${MINIMAX_API_KEY}" = "REPLACE_WITH_MINIMAX_KEY" ] || [ "${MINIMAX_API_KEY}" = "null" ]; then
+      echo "ERROR: MINIMAX_API_KEY is not set. claw-mock runs on MiniMax M3 only — no fallback providers exist."
+      exit 1
+    fi
+
+    cp /template/openclaw.json /tmp/openclaw.json
+
+    # Write the rendered config to the openclaw home dir on the PVC,
+    # carrying forward ONLY the runtime-state subset from any existing
+    # persistent file (gateway auth token, Telegram pairing approvals,
+    # channel state, meta). Everything declarative (providers, agents,
+    # models) comes from the template — without the allowlist, a previous
+    # broken boot could persist a bad config and crash all future pods.
+    PERSISTENT_DIR=/home/node/.openclaw
+    PERSISTENT_FILE=$PERSISTENT_DIR/openclaw.json
+    mkdir -p "$PERSISTENT_DIR"
+
+    if [ -f "$PERSISTENT_FILE" ] && command -v node >/dev/null 2>&1; then
+      echo "Carrying forward runtime state from $PERSISTENT_FILE"
+      node -e '
+        const fs = require("fs");
+        const inj = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        let pst = {};
+        try { pst = JSON.parse(fs.readFileSync(process.argv[2], "utf8")); } catch {}
+        for (const k of ["meta", "channels", "commands", "gateway"]) {
+          if (pst[k] == null) continue;
+          if (k === "commands") {
+            inj.commands = {...(inj.commands || {})};
+            if (pst.commands.ownerAllowFrom != null) inj.commands.ownerAllowFrom = pst.commands.ownerAllowFrom;
+            continue;
+          }
+          if (k === "gateway") {
+            inj.gateway = {...(inj.gateway || {})};
+            if (pst.gateway.auth != null) inj.gateway.auth = pst.gateway.auth;
+            continue;
+          }
+          inj[k] = pst[k];
+        }
+        fs.writeFileSync(process.argv[3], JSON.stringify(inj, null, 2));
+      ' /tmp/openclaw.json "$PERSISTENT_FILE" /tmp/merged.json
+      mv /tmp/merged.json /tmp/openclaw.json
+    elif [ -f "$PERSISTENT_FILE" ]; then
+      echo "WARN: node unavailable for runtime-state carry-over — pairings will reset"
+    else
+      echo "No existing openclaw.json on the PVC — writing rendered config as-is"
+    fi
+
+    cp /tmp/openclaw.json "$PERSISTENT_FILE"
+    chmod 0600 "$PERSISTENT_FILE"
+    echo "Wrote $PERSISTENT_FILE ($(wc -c < "$PERSISTENT_FILE") bytes)"
+
+    # Also keep the claw-mock-config ConfigMap up to date — not consumed
+    # by the main container today, but useful for debugging (`kubectl
+    # get cm claw-mock-config -o yaml`) and harmless.
+    kubectl create configmap claw-mock-config \
+      -n claw-mock \
+      --from-file=openclaw.json=/tmp/openclaw.json \
+      --dry-run=client -o yaml \
+    | kubectl apply -f -

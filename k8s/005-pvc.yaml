@@ -1,0 +1,18 @@
+---
+# Persistent workspace for the openclaw container.
+# Backed by an Azure Managed Disk via the default AKS CSI driver
+# (disk.csi.azure.com). Disk is RWO — fine for replicas=1 with the
+# Deployment's Recreate strategy. The mount lives at
+# /home/node/.openclaw inside the container.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: claw-mock-workspace
+  namespace: claw-mock
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: default
+  resources:
+    requests:
+      storage: 50Gi

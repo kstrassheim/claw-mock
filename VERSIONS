@@ -1,0 +1,12 @@
+# claw-mock version pins — single source of truth.
+# Read by .github/workflows/validate.yml and .github/workflows/deploy.yml.
+# Bump a value here and a PR / merge will rebuild the image with it.
+
+# Upstream openclaw base image (FROM in builder/Dockerfile).
+# Tag matches https://github.com/openclaw/openclaw releases.
+OPENCLAW_UPSTREAM=v2026.7.1
+
+# Tools baked into the openclaw image.
+KUBECTL_VERSION=1.35.3
+SQLCMD_VERSION=1.10.0
+TERRAFORM_VERSION=1.13.0

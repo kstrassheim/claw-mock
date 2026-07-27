@@ -1,0 +1,210 @@
+---
+# ServiceAccount + Role + RoleBinding so the render-config init container
+# can patch the claw-mock-config ConfigMap at pod start. Scoped tightly:
+# only the claw-mock-config ConfigMap in this namespace, get/patch/update.
+#
+# The deploy pipeline annotates this SA with
+# `azure.workload.identity/client-id: <deploy-claw-mock-dev client id>`
+# (value from the terraform `deploy_identity_client_id` output). Together
+# with the pod label `azure.workload.identity/use: "true"` below, that
+# gives the pod an Entra token for Azure SQL — no SQL password exists.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: claw-mock
+  namespace: claw-mock
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claw-mock-config-writer
+  namespace: claw-mock
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["claw-mock-config"]
+    verbs: ["get", "patch", "update", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claw-mock-config-writer
+  namespace: claw-mock
+subjects:
+  - kind: ServiceAccount
+    name: claw-mock
+    namespace: claw-mock
+roleRef:
+  kind: Role
+  name: claw-mock-config-writer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claw-mock
+  namespace: claw-mock
+  labels:
+    app: claw-mock
+    environment: dev
+    project: claw-mock
+spec:
+  replicas: 1
+  # `Recreate` (not the default RollingUpdate): terminate the old pod first,
+  # then start the new one. With replicas=1 and a RWO claw-mock-workspace
+  # PVC, RollingUpdate deadlocks — the new pod can't mount the volume
+  # while the old pod still holds it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: claw-mock
+  template:
+    metadata:
+      labels:
+        app: claw-mock
+        # Azure Workload Identity webhook: inject AZURE_CLIENT_ID /
+        # AZURE_TENANT_ID / AZURE_FEDERATED_TOKEN_FILE into the pod so
+        # sqlcmd -G --authentication-method=ActiveDirectoryDefault can
+        # reach the Entra-only SQL server.
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: claw-mock
+      # PVC mounts default to root:root. The openclaw container runs as
+      # uid 1000 (node user) and writes config + state into
+      # /home/node/.openclaw — so the mounted volume must be
+      # group-writable by gid 1000.
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: Always
+      initContainers:
+        # Pre-create subPath/mount parent dirs and fix ownership so the
+        # main container (uid 1000) can write into the PVC.
+        - name: fix-perms
+          image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Pre-create the dirs the main container's ConfigMap
+              # mounts target (workspace/MOCKING/, workspace/skills/
+              # mocker/). If we don't, kubelet creates them at
+              # main-container start as root:root mode 0755 — fsGroup
+              # re-chgrps to gid 1000 but doesn't add g+w, and the bot
+              # can't write siblings next to them.
+              mkdir -p /home/node/.openclaw/workspace/MOCKING
+              mkdir -p /home/node/.openclaw/workspace/skills/mocker
+              chown -R 1000:1000 /home/node/.openclaw
+              chmod -R u+rwX,g+rwX /home/node/.openclaw
+          volumeMounts:
+            - name: workspace
+              mountPath: /home/node/.openclaw
+        # Renders the openclaw.json from the template ConfigMap into the
+        # PVC (fails fast if MINIMAX_API_KEY is missing — MiniMax is the
+        # only provider) and mirrors it into the claw-mock-config
+        # ConfigMap for debugging.
+        - name: render-config
+          image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "/scripts/render-config.sh"]
+          env:
+            - name: MINIMAX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: claw-mock-secrets
+                  key: MINIMAX_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: config-template
+              mountPath: /template
+            - name: render-scripts
+              mountPath: /scripts
+            - name: workspace
+              mountPath: /home/node/.openclaw
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      containers:
+        - name: claw-mock
+          image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 18789
+              name: web
+            - containerPort: 18790
+              name: bridge
+          envFrom:
+            - configMapRef:
+                name: claw-mock-config
+            # API keys + Entra credentials, applied by the
+            # seal-secrets workflow (ENTRA_*, MINIMAX_API_KEY,
+            # TELEGRAM_BOT_TOKEN).
+            - secretRef:
+                name: claw-mock-secrets
+            # SQL connection info, created by Terraform
+            # (SQL_SERVER_FQDN, SQL_DB_ADVENTUREWORKS, SQL_DB_NORTHWIND —
+            # no credentials: auth is Entra workload identity).
+            - secretRef:
+                name: claw-mock-db
+          volumeMounts:
+            # Mount the PVC at the WHOLE openclaw state directory —
+            # openclaw.json, identity/, sessions/, logs/ all persist
+            # across pod restarts (otherwise Telegram re-pairs on
+            # every restart).
+            - name: workspace
+              mountPath: /home/node/.openclaw
+            - name: tools-md
+              mountPath: /home/node/.openclaw/workspace/TOOLS.md
+              subPath: TOOLS.md
+            # Mocking manuals, read by the bot at the start of every
+            # hourly mock run. ConfigMap content is generated at deploy
+            # time from the MOCKING-*.md files in the repo root.
+            - name: mocking-manuals
+              mountPath: /home/node/.openclaw/workspace/MOCKING
+            # `mocker` chat skill — toggle / inspect the hourly
+            # db-mocker CronJob from chat. Pod restart required to pick
+            # up ConfigMap edits.
+            - name: skill-mocker
+              mountPath: /home/node/.openclaw/workspace/skills/mocker/SKILL.md
+              subPath: SKILL.md
+          resources:
+            # Node is Standard_D2pds_v5 (2 vCPU, 8 Gi). Requests
+            # guarantee a baseline; limits give burst headroom for mock
+            # runs (sqlcmd batches, LLM streaming).
+            requests:
+              cpu: 600m
+              memory: 1500Mi
+            limits:
+              cpu: 1700m
+              memory: 5632Mi
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: claw-mock-workspace
+        - name: tools-md
+          configMap:
+            name: claw-mock-tools-md
+        - name: mocking-manuals
+          configMap:
+            name: claw-mock-mocking-manuals
+        - name: skill-mocker
+          configMap:
+            name: claw-mock-skill-mocker
+        - name: config-template
+          configMap:
+            name: claw-mock-config-template
+        - name: render-scripts
+          configMap:
+            name: claw-mock-render-scripts
+            defaultMode: 0755

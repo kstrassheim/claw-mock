@@ -1,0 +1,64 @@
+---
+# Mirror of the Terraform-managed NetworkPolicies (main.tf). Terraform
+# is the source of truth; these manifests exist so a bare
+# `kubectl apply -f k8s/` also yields the intended posture. kubectl
+# apply reconciles them without fighting Terraform.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: claw-mock
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: claw-mock
+spec:
+  podSelector: {}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-https
+  namespace: claw-mock
+spec:
+  podSelector: {}
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+  policyTypes:
+    - Egress
+---
+# TDS/1433 egress — the bot's sqlcmd connection to Azure SQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mssql
+  namespace: claw-mock
+spec:
+  podSelector: {}
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 1433
+  policyTypes:
+    - Egress

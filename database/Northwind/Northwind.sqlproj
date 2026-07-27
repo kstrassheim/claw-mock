@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Northwind SQL database project (classic schema, dbo).
+
+  Build the dacpac:
+    dotnet build Northwind.sqlproj -c Release
+    -> bin/Release/net8.0/Northwind.dacpac
+
+  Deploy locally (VS Code "SQL Database Projects" extension, or CLI).
+  The target Azure SQL server is Entra-only — authenticate with Entra:
+    sqlpackage /a:Publish \
+      /sf:bin/Release/net8.0/Northwind.dacpac \
+      /tsn:<server> /tdn:Northwind \
+      /p:Authentication="Active Directory Default"
+  (For a local/dind SQL Server without Entra, classic SQL auth works too:
+   /tu:sa /tp:<password> — the dacpac itself creates no users.)
+
+  SDK: MSBuild.Sdk.SqlProj (cross-platform, builds on any dotnet SDK —
+  this is what the CI dacpac-build job uses on ubuntu-latest).
+-->
+<Project Sdk="MSBuild.Sdk.SqlProj/3.1.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- SqlProj builds no ref assembly; without this the .NET 8 SDK
+         CopyRefAssembly task fails with MSB4044 (empty SourcePath). -->
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <SqlServerVersion>SqlAzure</SqlServerVersion>
+    <RunSqlCodeAnalysis>False</RunSqlCodeAnalysis>
+  </PropertyGroup>
+  <ItemGroup>
+    <PostDeploy Include="Scripts\PostDeployment.sql" />
+  </ItemGroup>
+</Project>
