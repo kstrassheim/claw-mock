@@ -15,15 +15,17 @@ rules (timestamps inside the last ~65 minutes), and the integrity rules.
 ## How to connect
 
 Use your `exec` tool. `sqlcmd` is on PATH and the connection parameters
-are in your environment:
+are in your environment. The SQL server is Entra-only — you authenticate
+as the deploy identity via Azure Workload Identity (the webhook already
+injected the token file into your pod; no password exists):
 
 ```bash
 sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_ADVENTUREWORKS}" \
-       -U "${SQL_BOT_USER}" -P "${SQL_BOT_PASSWORD}" -l 30 -N -C -h-1 -W
+       -G --authentication-method=ActiveDirectoryDefault -l 30 -N -C -h-1 -W
 ```
 
 Swap `${SQL_DB_ADVENTUREWORKS}` for `${SQL_DB_NORTHWIND}` for the other
-database. Never print `${SQL_BOT_PASSWORD}` into your reply.
+database.
 
 ## Rules
 

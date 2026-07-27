@@ -18,10 +18,6 @@ terraform {
       source  = "hashicorp/azuread"
       version = "~> 3.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
   }
 
   backend "azurerm" {
@@ -199,6 +195,12 @@ resource "azurerm_kubernetes_cluster" "aks" {
     type = "SystemAssigned"
   }
 
+  # Azure Workload Identity: the claw-mock pod authenticates to Azure SQL
+  # as the deploy identity (deploy-claw-mock-dev) via a projected
+  # service-account token — no SQL password, no client secret anywhere.
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
+
   azure_active_directory_role_based_access_control {
     azure_rbac_enabled     = true
     admin_group_object_ids = [data.azuread_group.aks_admin.object_id]
@@ -233,31 +235,27 @@ resource "azurerm_role_assignment" "aks_admin" {
 # =============================================================================
 # Azure SQL Server (MSSQL) — cheapest tier, 2 databases
 #
-# Server-level admin is the Entra group local-data-admins-claw-mock-dev
-# (referenced via the azuread_group data source above — never hardcoded
-# object IDs). A SQL admin login also exists because the azurerm provider
-# requires one unless Entra-only auth is enabled; its password is a
-# random value that lives only in Terraform state and is not used by any
-# pipeline step or by the bot.
+# Entra-only authentication (azuread_authentication_only = true): NO SQL
+# admin login, NO SQL password anywhere on the server. Server-level admin
+# is the Entra group local-data-admins-claw-mock-dev (referenced via the
+# azuread_group data source above — never hardcoded object IDs). Its
+# members — cameron-howe and the deploy identity deploy-claw-mock-dev —
+# are admins of every database on the server, which is how both the
+# deploy pipeline (sqlpackage, "Active Directory Default") and the
+# runtime bot (workload identity) authenticate.
 # =============================================================================
-resource "random_password" "sql_admin" {
-  length  = 32
-  special = false
-}
-
 resource "azurerm_mssql_server" "sql" {
-  name                         = local.sql_server_name
-  resource_group_name          = data.azurerm_resource_group.rg.name
-  location                     = data.azurerm_resource_group.rg.location
-  version                      = "12.0"
-  administrator_login          = "clawmockadmin"
-  administrator_login_password = random_password.sql_admin.result
-  minimum_tls_version          = "1.2"
+  name                = local.sql_server_name
+  resource_group_name = data.azurerm_resource_group.rg.name
+  location            = data.azurerm_resource_group.rg.location
+  version             = "12.0"
+  minimum_tls_version = "1.2"
 
   azuread_administrator {
-    login_username = data.azuread_group.sql_admins.display_name
-    object_id      = data.azuread_group.sql_admins.object_id
-    tenant_id      = data.azurerm_client_config.current.tenant_id
+    login_username              = data.azuread_group.sql_admins.display_name
+    object_id                   = data.azuread_group.sql_admins.object_id
+    tenant_id                   = data.azurerm_client_config.current.tenant_id
+    azuread_authentication_only = true
   }
 
   tags = {
@@ -307,24 +305,16 @@ resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
 }
 
 # =============================================================================
-# Bot database credentials
+# Bot database connection info
 #
-# The bot authenticates to both databases as the contained database user
-# `clawmockbot` (created by each dacpac's post-deployment script with
-# WITH PASSWORD = '$(BotPassword)'). The password is generated here and
-# flows to two places:
-#   1. this Kubernetes secret — read by the claw-mock pod via envFrom
-#   2. the `bot_sql_password` sensitive output — read by the deploy
-#      pipeline to pass /v:BotPassword to sqlpackage
+# The SQL server is Entra-only, so there is no SQL user or password to
+# hand to the bot. The pod authenticates as the deploy identity
+# (deploy-claw-mock-dev) via Azure Workload Identity; that identity is a
+# member of the server's Entra-admin group and therefore has full access
+# to both databases. This secret carries only non-secret connection
+# parameters (kept as a Secret so the deployment's envFrom wiring matches
+# the other claw-mock secrets).
 # =============================================================================
-resource "random_password" "bot_sql" {
-  length      = 32
-  special     = false
-  min_lower   = 4
-  min_upper   = 4
-  min_numeric = 4
-}
-
 resource "kubernetes_secret" "claw_mock_db" {
   metadata {
     name      = "claw-mock-db"
@@ -332,12 +322,24 @@ resource "kubernetes_secret" "claw_mock_db" {
   }
   data = {
     SQL_SERVER_FQDN       = azurerm_mssql_server.sql.fully_qualified_domain_name
-    SQL_BOT_USER          = "clawmockbot"
-    SQL_BOT_PASSWORD      = random_password.bot_sql.result
     SQL_DB_ADVENTUREWORKS = azurerm_mssql_database.adventureworks.name
     SQL_DB_NORTHWIND      = azurerm_mssql_database.northwind.name
   }
   depends_on = [kubernetes_namespace.claw-mock]
+}
+
+# Federated credential that lets the claw-mock Kubernetes service account
+# (namespace/SA: claw-mock/claw-mock) exchange its projected token for an
+# Entra token of the deploy identity. This is the pod's ONLY credential —
+# no keys, no secrets. The deploy pipeline annotates the SA with the
+# identity's client ID at deploy time (deploy_identity_client_id output).
+resource "azurerm_federated_identity_credential" "claw_mock_workload" {
+  name                = "claw-mock-workload"
+  resource_group_name = data.azurerm_resource_group.rg.name
+  parent_id           = data.azurerm_user_assigned_identity.deploy_identity.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.aks.oidc_issuer_url
+  subject             = "system:serviceaccount:${var.namespace}:claw-mock"
 }
 
 # =============================================================================
@@ -453,12 +455,6 @@ output "sql_server_fqdn" {
 output "sql_databases" {
   description = "Mock databases on the SQL server"
   value       = [azurerm_mssql_database.adventureworks.name, azurerm_mssql_database.northwind.name]
-}
-
-output "bot_sql_password" {
-  description = "Password of the contained database user clawmockbot (passed to sqlpackage /v:BotPassword by the deploy pipeline)"
-  value       = random_password.bot_sql.result
-  sensitive   = true
 }
 
 output "kubeconfig" {

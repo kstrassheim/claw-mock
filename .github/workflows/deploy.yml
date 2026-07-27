@@ -4,7 +4,7 @@ name: Deploy (Push to main)
 #   1. check-minimax-secret  — fail-fast if MINIMAX_API_KEY is not set
 #   2. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
 #   3. dacpac-build-deploy   — build both dacpacs and publish them onto the
-#                              Azure SQL server (schema + seed + bot user)
+#                              Azure SQL server (schema + seed data)
 #   4. build-and-push-image  — build the claw-mock image, push :latest+:sha
 #   5. deploy-to-aks         — kubectl apply -f k8s/, then rollout restart
 #
@@ -143,10 +143,10 @@ jobs:
 
   dacpac-build-deploy:
     # After terraform: build both .sqlproj into dacpacs and publish them
-    # onto the Azure SQL server — schema, FKs, post-deployment seed data
-    # and the contained `clawmockbot` user (password from TF state).
-    # The deploy identity is a member of the SQL Entra-admin group, so
-    # sqlpackage authenticates as "Active Directory Default" (az login).
+    # onto the Azure SQL server — schema, FKs and post-deployment seed
+    # data. The SQL server is Entra-only; the deploy identity is a
+    # member of the SQL Entra-admin group, so sqlpackage authenticates
+    # as "Active Directory Default" (az login session).
     name: Dacpac Build + Deploy to Azure SQL
     needs: terraform-apply
     runs-on: ubuntu-latest
@@ -189,25 +189,21 @@ jobs:
         run: |
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
-          BOT_PW=$(jq -r '.bot_sql_password.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
             /sf:database/AdventureWorks/bin/Release/AdventureWorks.dacpac \
             /tsn:"$SQL_FQDN",1433 /tdn:AdventureWorks \
             /p:Authentication="Active Directory Default" \
-            /p:Encrypt=True \
-            /v:BotPassword="$BOT_PW"
+            /p:Encrypt=True
 
       - name: Publish Northwind dacpac
         run: |
           set -euo pipefail
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
-          BOT_PW=$(jq -r '.bot_sql_password.value' /tmp/tfout/terraform_output.json)
           sqlpackage /a:Publish \
             /sf:database/Northwind/bin/Release/Northwind.dacpac \
             /tsn:"$SQL_FQDN",1433 /tdn:Northwind \
             /p:Authentication="Active Directory Default" \
-            /p:Encrypt=True \
-            /v:BotPassword="$BOT_PW"
+            /p:Encrypt=True
 
       - name: Azure logout
         if: always()
@@ -315,6 +311,12 @@ jobs:
             --file /tmp/kubeconfig \
             --admin
 
+      - name: Download Terraform Output artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: terraform-output
+          path: /tmp/tfout
+
       - name: Install kubectl
         run: |
           ARCH=$(dpkg --print-architecture)
@@ -330,6 +332,17 @@ jobs:
         # are skipped here (they're not YAML manifests). The next steps
         # assemble them into ConfigMaps via `kubectl create --from-file`.
         run: kubectl apply -f k8s/
+
+      - name: Point the claw-mock ServiceAccount at the deploy identity
+        # Azure Workload Identity: the pod exchanges its projected SA
+        # token for an Entra token of deploy-claw-mock-dev (federated
+        # credential created by Terraform). The annotation value comes
+        # from the Terraform output — never hardcoded.
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(jq -r '.deploy_identity_client_id.value' /tmp/tfout/terraform_output.json)
+          kubectl -n claw-mock annotate serviceaccount claw-mock \
+            azure.workload.identity/client-id="$CLIENT_ID" --overwrite
 
       - name: Build and apply claw-mock-tools-md ConfigMap from k8s/tools/
         run: |

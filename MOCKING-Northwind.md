@@ -8,8 +8,11 @@ at the start of every hourly mock run (mounted into the pod at
 
 ```bash
 sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "${SQL_DB_NORTHWIND}" \
-       -U "${SQL_BOT_USER}" -P "${SQL_BOT_PASSWORD}" -l 30 -N -C
+       -G --authentication-method=ActiveDirectoryDefault -l 30 -N -C
 ```
+
+(Entra-only server — the bot authenticates via Azure Workload Identity
+as the deploy identity. No SQL user/password exists.)
 
 ## Table classification
 

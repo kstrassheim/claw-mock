@@ -6,12 +6,14 @@
     dotnet build Northwind.sqlproj -c Release
     -> bin/Release/Northwind.dacpac
 
-  Deploy locally (VS Code "SQL Database Projects" extension, or CLI):
+  Deploy locally (VS Code "SQL Database Projects" extension, or CLI).
+  The target Azure SQL server is Entra-only — authenticate with Entra:
     sqlpackage /a:Publish \
       /sf:bin/Release/Northwind.dacpac \
       /tsn:<server> /tdn:Northwind \
-      /tu:<user> /tp:<password> \
-      /v:BotPassword="<password for the contained user clawmockbot>"
+      /p:Authentication="Active Directory Default"
+  (For a local/dind SQL Server without Entra, classic SQL auth works too:
+   /tu:sa /tp:<password> — the dacpac itself creates no users.)
 
   SDK: MSBuild.Sdk.SqlProj (cross-platform, builds on any dotnet SDK —
   this is what the CI dacpac-build job uses on ubuntu-latest).
