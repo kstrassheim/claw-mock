@@ -5,6 +5,7 @@ name: Validate (Pull Request)
 #   - dacpac-build         : build both .sqlproj into .dacpac artifacts
 #   - dacpac-deploy-test   : publish both dacpacs onto an ephemeral
 #                            SQL Server in docker-in-docker (dind)
+#   - docker-build         : build the claw-mock container image (no push)
 # None of these jobs change anything in Azure or the cluster.
 
 on:
@@ -402,3 +403,55 @@ jobs:
             exit 1
           fi
           echo "  re-run left Product at $AFTER"
+
+  docker-build:
+    # Build-test for the pod image on every PR. Build only — nothing is
+    # pushed to ACR and nothing is deployed; the job exists so a broken
+    # Dockerfile / bad build-arg / missing COPY source fails the PR
+    # instead of the post-merge deploy.
+    #
+    # Deliberately self-contained: no Azure login, no ACR. The base
+    # image is pulled straight from the upstream GHCR repo
+    # (ghcr.io/openclaw/openclaw:<tag>) — the same image deploy.yml
+    # mirrors into ACR as openclaw/openclaw-base. The builder layer on
+    # top is identical, so a PR that builds here will also build on
+    # merge.
+    #
+    # Also no `environment: dev` — this job needs no secrets, and
+    # skipping the environment keeps it out of any protection rules
+    # attached to it.
+    name: Docker Image Build (no push)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read version pins from /VERSIONS
+        id: version
+        run: |
+          set -euo pipefail
+          for key in OPENCLAW_UPSTREAM KUBECTL_VERSION SQLCMD_VERSION; do
+            echo "${key}=$(grep "^${key}=" VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          done
+          # GHCR tags drop the leading 'v' (ghcr.io/openclaw/openclaw:2026.7.1,
+          # not v2026.7.1) — same transform deploy.yml uses for az acr import.
+          UPSTREAM="${{ steps.version.outputs.OPENCLAW_UPSTREAM }}"
+          echo "GHCR_TAG=${UPSTREAM#v}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./builder
+          push: false
+          load: true
+          tags: claw-mock:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            BASE_IMAGE=ghcr.io/openclaw/openclaw:${{ steps.version.outputs.GHCR_TAG }}
+            KUBECTL_VERSION=${{ steps.version.outputs.KUBECTL_VERSION }}
+            SQLCMD_VERSION=${{ steps.version.outputs.SQLCMD_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
