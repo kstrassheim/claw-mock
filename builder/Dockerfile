@@ -27,7 +27,9 @@ ARG KUBECTL_VERSION
 ARG SQLCMD_VERSION
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates bzip2 \
+ && apt-get install -y --no-install-recommends curl ca-certificates bzip2 tzdata \
+ && ln -snf /usr/share/zoneinfo/Europe/Zurich /etc/localtime \
+ && echo "Europe/Zurich" > /etc/timezone \
  && ARCH=$(dpkg --print-architecture) \
  && curl -fsSL -o /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
@@ -58,5 +60,9 @@ COPY mock-runner.sh     /usr/local/bin/mock-runner
 COPY mock-prompt.md     /usr/local/share/claw-mock/mock-prompt.md
 RUN chmod 0755 /usr/local/bin/cron-mock-spawn /usr/local/bin/mock-runner \
  && chown -R 1000:1000 /usr/local/share/claw-mock
+
+# Issue #15 — bot logs and messages must carry Zürich local time
+# (CET/CEST, DST handled by the IANA zone) instead of the base image's UTC.
+ENV TZ=Europe/Zurich
 
 USER 1000
