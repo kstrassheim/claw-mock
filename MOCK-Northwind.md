@@ -76,17 +76,23 @@ the max. Never trim below the min.
 
 | Table | Min | Max |
 |---|---|---|
-| `dbo.Orders` | 40 | 120 |
+| `dbo.Orders` | 8 | 15 |
 | `dbo.[Order Details]` | (follows Orders) | (follows Orders) |
-| `dbo.Customers` | 10 | 30 |
-| `dbo.Products` | 8 | 20 |
+| `dbo.Customers` | 4 | 6 |
+| `dbo.Products` | 5 | 8 |
 
-These are sized against the actual run rate (2–8 orders per hourly run),
-not against a production-sized warehouse. The previous bands started at
-5,000 rows, which at this rate is roughly 100 days away — so the trim path
-was correct but unreachable and the database only ever grew. The maxima
-above are hit within about a day from an empty seed, after which every run
-trims and the size stays flat, which is the point of the band.
+These are deliberately tight — smaller than the database already is. At
+2–8 new orders per hourly run, an `Orders` max of 15 means every single
+run inserts, then trims back to 15, so the fact tables sit at their
+maximum permanently and the DWH import always sees deletions between two
+imports. That is the behaviour being exercised here; correctness of the
+trim path matters more than realistic warehouse volume.
+
+Earlier bands (5,000 rows, then 120) were never reached at this run rate,
+so the trim path was correct but dead code and the database only ever grew.
+If you later want a larger corpus, raise the maxima — but keep
+`max - min` well above the per-run insert rate so a single run cannot
+push the table from below the min to above the max.
 
 Trimming rules — **dependencies first, children before parents**:
 
@@ -101,6 +107,11 @@ Trimming rules — **dependencies first, children before parents**:
 - Never delete dimension rows created in this run, and stop as soon as
   the table is back at its max — do not over-delete.
 - Static reference tables are never trimmed.
+- A dimension can sit above its max with nothing deletable, because every
+  candidate row is still referenced. That is expected and not an error:
+  delete what you can, report the rest as not deleted, and never break an
+  FK or disable a constraint to get under the max. Trimming the facts
+  first usually frees dimension rows for the next run.
 
 ## Edge cases (DWH import testing)
 

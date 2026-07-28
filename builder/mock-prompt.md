@@ -49,6 +49,12 @@ your pod; no password exists anywhere.
   (check every FK that can point at them, directly or transitively)
   and they were not created in this run. Never trim a table below its
   min band.
+  Run this check every single run, on every banded table, without
+  exception: actually `SELECT COUNT(*)` and compare against the max —
+  do not assume a table is still below its band because it was last
+  run. The bands are set so the fact tables are above their max after
+  every insert, so a run that reports no deletions at all is almost
+  certainly a run that skipped this step.
 - **Edge cases:** these databases feed a DWH import that must be
   tested against column limits. On 0–2 of the rows you insert or
   update per run per database, use a value from the manual's
