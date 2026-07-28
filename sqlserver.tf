@@ -45,6 +45,15 @@ resource "azurerm_mssql_server" "sql" {
   }
 }
 
+# Resetting a database to its seeded state means DROPPING it and letting
+# this resource recreate it — not emptying it in place. Two reasons:
+#   - The bot's identity holds only db_datawriter/db_datareader, so it can
+#     DELETE rows but not ALTER TABLE or DBCC CHECKIDENT.
+#   - seed/<db>.sql references parents by literal ID (CustomerID = 1, ...),
+#     so it only lines up when identities start from 1 again.
+# After the drop, terraform recreates the database, the dacpac publishes the
+# schema, and seed-databases refills it because every table is empty.
+
 # Basic SKU (5 DTU, 2 GB) — the cheapest Azure SQL tier. Mock databases
 # don't need more; scale up later if the mock load outgrows it.
 resource "azurerm_mssql_database" "adventureworks" {
