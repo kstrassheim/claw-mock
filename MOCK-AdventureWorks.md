@@ -88,12 +88,19 @@ the max. Never trim below the min.
 
 | Table | Min | Max |
 |---|---|---|
-| `Sales.SalesOrderHeader` | 5,000 | 20,000 |
+| `Sales.SalesOrderHeader` | 50 | 150 |
 | `Sales.SalesOrderDetail` | (follows header) | (follows header) |
-| `Sales.Customer` | 200 | 1,000 |
-| `Person.Person` | 200 | 1,000 |
-| `Person.Address` | 200 | 1,000 |
-| `Production.Product` | 100 | 500 |
+| `Sales.Customer` | 15 | 40 |
+| `Person.Person` | 15 | 40 |
+| `Person.Address` | 15 | 40 |
+| `Production.Product` | 8 | 20 |
+
+These are sized against the actual run rate (3–10 orders per hourly run),
+not against a production-sized warehouse. The previous bands started at
+5,000 rows, which at this rate is roughly 100 days away — so the trim path
+was correct but unreachable and the database only ever grew. The maxima
+above are hit within about a day from an empty seed, after which every run
+trims and the size stays flat, which is the point of the band.
 
 Trimming rules — **dependencies first, children before parents**:
 
