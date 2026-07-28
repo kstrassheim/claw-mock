@@ -436,7 +436,10 @@ jobs:
           done
           # GHCR tags drop the leading 'v' (ghcr.io/openclaw/openclaw:2026.7.1,
           # not v2026.7.1) — same transform deploy.yml uses for az acr import.
-          UPSTREAM="${{ steps.version.outputs.OPENCLAW_UPSTREAM }}"
+          # NOTE: must read from the file here; ${{ steps.*.outputs.* }} is
+          # interpolated BEFORE this step runs, so self-referencing the step's
+          # own outputs yields an empty tag ("openclaw/openclaw:").
+          UPSTREAM=$(grep '^OPENCLAW_UPSTREAM=' VERSIONS | cut -d= -f2)
           echo "GHCR_TAG=${UPSTREAM#v}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
