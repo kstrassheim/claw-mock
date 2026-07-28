@@ -1,14 +1,20 @@
 /*
-Post-deployment script for AdventureWorks.
+Seed data for AdventureWorks.
 
-Seeds a small, deterministic sample dataset (only into empty tables —
-the script is idempotent across repeated dacpac publishes).
+Applied by the "Seed databases" job in .github/workflows/deploy.yml, and
+ONLY when the database is still uninitialised — every user table empty.
 
-No database user is created here: the Azure SQL server is Entra-only
-(azuread_authentication_only), so SQL-authenticated contained users
-cannot exist. The claw-mock bot connects as the deploy identity
-(deploy-claw-mock-dev) via Azure Workload Identity; that identity is a
-member of the server's Entra-admin group and needs no per-database user.
+This is deliberately NOT a dacpac post-deployment script any more. As a
+PostDeploy item it ran on every publish, which is wrong for a database the
+mock bot mutates continuously between deploys: the dacpac should carry
+schema, nothing else.
+
+The per-table IF NOT EXISTS guards below are kept as a second line of
+defence, but the job-level "all tables empty" check is the real gate.
+
+No database user is created here. The server is Entra-only
+(azuread_authentication_only), and the bot's own database user and roles
+are granted separately by /init-sql-permissions.sql.
 */
 
 -- =========================================================================

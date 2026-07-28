@@ -337,20 +337,68 @@ jobs:
             exit 1
           fi
 
-      - name: Verify seed data (AdventureWorks)
+      # The dacpacs are schema only — seeding is no longer a PostDeploy item
+      # inside the package, it is /seed/<db>.sql applied by the deploy
+      # pipeline to an empty database. Apply them here too, otherwise the
+      # seed SQL would never be executed anywhere in PR validation.
+      - name: Apply seed scripts
         run: |
-          docker exec mssql "$SQLCMD" \
-            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
-            -d AdventureWorks -Q "
-              SET NOCOUNT ON;
-              SELECT 'Products=' + CAST(COUNT(*) AS VARCHAR) FROM [Production].[Product];
-              SELECT 'Orders=' + CAST(COUNT(*) AS VARCHAR) FROM [Sales].[SalesOrderHeader];"
+          set -euo pipefail
+          for DB in AdventureWorks Northwind; do
+            echo "::group::Seeding $DB"
+            docker cp "seed/${DB}.sql" "mssql:/tmp/${DB}-seed.sql"
+            if ! docker exec mssql "$SQLCMD" \
+              -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 30 -b \
+              -d "$DB" -i "/tmp/${DB}-seed.sql"; then
+              echo "::error::seeding $DB failed"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
 
-      - name: Verify seed data (Northwind)
+      # Assert, don't just print. These previously selected counts without
+      # checking them, so they would have stayed green against an empty
+      # database once seeding moved out of the dacpac.
+      - name: Verify seed data landed
         run: |
+          set -euo pipefail
+          assert_rows() {
+            local db="$1" table="$2" count
+            count=$(docker exec mssql "$SQLCMD" \
+              -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W -b \
+              -d "$db" -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM $table;" \
+              | tr -d '[:space:]')
+            if ! printf '%s' "$count" | grep -qE '^[0-9]+$'; then
+              echo "::error::could not read count for $db.$table (got '$count')"
+              exit 1
+            fi
+            if [ "$count" -eq 0 ]; then
+              echo "::error::$db.$table is empty after seeding"
+              exit 1
+            fi
+            echo "  $db.$table = $count"
+          }
+          assert_rows AdventureWorks "[Production].[Product]"
+          assert_rows AdventureWorks "[Sales].[SalesOrderHeader]"
+          assert_rows Northwind "[dbo].[Products]"
+          assert_rows Northwind "[dbo].[Orders]"
+
+      # Re-running the seed must not duplicate or fail: the deploy job gates
+      # on "all tables empty", and the per-table guards are the backstop.
+      - name: Verify seed is idempotent
+        run: |
+          set -euo pipefail
+          BEFORE=$(docker exec mssql "$SQLCMD" \
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W -b \
+            -d AdventureWorks -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM [Production].[Product];" | tr -d '[:space:]')
           docker exec mssql "$SQLCMD" \
-            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W \
-            -d Northwind -Q "
-              SET NOCOUNT ON;
-              SELECT 'Products=' + CAST(COUNT(*) AS VARCHAR) FROM [dbo].[Products];
-              SELECT 'Orders=' + CAST(COUNT(*) AS VARCHAR) FROM [dbo].[Orders];"
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 30 -b \
+            -d AdventureWorks -i /tmp/AdventureWorks-seed.sql
+          AFTER=$(docker exec mssql "$SQLCMD" \
+            -S localhost -U sa -P "$SA_PASSWORD" -N -C -l 15 -h-1 -W -b \
+            -d AdventureWorks -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM [Production].[Product];" | tr -d '[:space:]')
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "::error::seed is not idempotent — Product went $BEFORE -> $AFTER on re-run"
+            exit 1
+          fi
+          echo "  re-run left Product at $AFTER"

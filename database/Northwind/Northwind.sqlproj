@@ -27,7 +27,14 @@
     <SqlServerVersion>SqlAzure</SqlServerVersion>
     <RunSqlCodeAnalysis>False</RunSqlCodeAnalysis>
   </PropertyGroup>
-  <ItemGroup>
-    <PostDeploy Include="Scripts\PostDeployment.sql" />
-  </ItemGroup>
+  <!--
+    No PostDeploy item on purpose. This dacpac is schema only.
+
+    The seed data used to be a post-deployment script inside the package,
+    which meant it ran on every single publish. Seeding is a one-time
+    concern for an empty database, and this one is deliberately mutated by
+    the mock bot between deploys, so it now lives in /seed/Northwind.sql
+    and the deploy pipeline applies it only when the database is still
+    empty. Re-adding a PostDeploy item here would reintroduce that coupling.
+  -->
 </Project>

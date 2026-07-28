@@ -20,9 +20,11 @@ on:
     paths:
       - 'builder/**'
       - 'database/**'
+      - 'seed/**'
       - 'k8s/**'
       - 'VERSIONS'
       - 'MOCK-*.md'
+      - 'init-sql-permissions.sql'
       - '**.tf'
       - '**.tfvars'
       - '.github/workflows/deploy.yml'
@@ -188,6 +190,93 @@ jobs:
           sqlpackage /a:Publish \
             /sf:database/Northwind/bin/Release/net8.0/Northwind.dacpac \
             /tcs:"Server=tcp:${SQL_FQDN},1433;Initial Catalog=Northwind;Authentication=Active Directory Default;Encrypt=True"
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
+  seed-databases:
+    # Seed data, applied ONLY to a database that is still uninitialised.
+    #
+    # This used to be a PostDeploy item inside each dacpac, so it ran on every
+    # publish. That is wrong for databases the mock bot mutates continuously:
+    # the dacpac carries schema, and seeding is a one-time concern. The gate
+    # here is "every user table is empty" — if the bot has written anything, or
+    # a previous run seeded, the database is left alone.
+    #
+    # Runs after the schema publish and in parallel with grant-sql-access;
+    # the two are independent (data vs permissions).
+    name: Seed databases (only when empty)
+    needs: dacpac-build-deploy
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      SQLCMD_VERSION: '1.8.2'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download Terraform Output artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: terraform-output
+          path: /tmp/tfout
+
+      - name: Install sqlcmd
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -sSLf -o /tmp/sqlcmd.tar.bz2 \
+            "https://github.com/microsoft/go-sqlcmd/releases/download/v${SQLCMD_VERSION}/sqlcmd-linux-amd64.tar.bz2"
+          tar xjf /tmp/sqlcmd.tar.bz2 -C "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/sqlcmd"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Seed each empty database
+        run: |
+          set -euo pipefail
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+
+          for DB in $(jq -r '.sql_databases.value[]' /tmp/tfout/terraform_output.json); do
+            SEED="seed/${DB}.sql"
+            if [ ! -f "$SEED" ]; then
+              echo "::notice::no $SEED — nothing to seed for $DB"
+              continue
+            fi
+
+            # Total rows across every user table. sys.partitions with
+            # index_id IN (0,1) counts heap or clustered rows exactly once.
+            ROWS=$(sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
+              --authentication-method ActiveDirectoryDefault \
+              --exit-on-error -h -1 -W \
+              -Q "SET NOCOUNT ON; SELECT ISNULL(SUM(p.rows),0) FROM sys.tables t JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0,1) WHERE t.is_ms_shipped = 0;" \
+              | tr -d '[:space:]')
+
+            if ! printf '%s' "$ROWS" | grep -qE '^[0-9]+$'; then
+              echo "::error::could not read row count for $DB (got '$ROWS')"
+              exit 1
+            fi
+
+            if [ "$ROWS" -eq 0 ]; then
+              echo "::group::Seeding $DB (all tables empty)"
+              sqlcmd -S "tcp:${SQL_FQDN},1433" -d "$DB" \
+                --authentication-method ActiveDirectoryDefault \
+                --exit-on-error -i "$SEED"
+              echo "::endgroup::"
+            else
+              echo "$DB already holds $ROWS rows — leaving it alone (the mock bot owns its contents)"
+            fi
+          done
 
       - name: Azure logout
         if: always()

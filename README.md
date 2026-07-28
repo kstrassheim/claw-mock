@@ -109,14 +109,19 @@ The `claw-mock-db` secret carries only the server FQDN and the database names.
 
 ```
 terraform-apply
-├── dacpac-build-deploy ──→ grant-sql-access
+├── dacpac-build-deploy ──┬─→ seed-databases
+│                         └─→ grant-sql-access
 ├── apply-secrets
 └── build-and-push-image ──→ deploy-to-aks
 ```
 
 - **terraform-apply** — AKS, ACR, storage, SQL server and both databases.
-- **dacpac-build-deploy** — builds both `.sqlproj` and publishes schema + seed
-  data to Azure SQL.
+- **dacpac-build-deploy** — builds both `.sqlproj` and publishes **schema only**
+  to Azure SQL. The dacpacs carry no seed data.
+- **seed-databases** — applies `seed/<database>.sql`, but only to a database
+  whose user tables are all still empty. Seeding is a one-time concern and the
+  bot owns the contents afterwards, so a database it has written to is never
+  reseeded.
 - **grant-sql-access** — runs `init-sql-permissions.sql` against `master` and
   each database. It runs *after* the dacpac publish, because a publish
   reconciles database objects against the package and grants applied earlier are
@@ -135,6 +140,10 @@ terraform-apply
 - `builder/mock-prompt.md` — the prompt for each hourly run, including the
   report format.
 - `k8s/050-db-mocker.yaml` — the hourly CronJob.
+- `seed/<database>.sql` — initial contents, applied only to an empty database.
+  Deliberately outside the `database/` projects: `MSBuild.Sdk.SqlProj` globs
+  `**/*.sql` as schema, so a seed script left in there would be compiled into
+  the dacpac.
 
 ## Region and architecture
 
