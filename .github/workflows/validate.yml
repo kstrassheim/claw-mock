@@ -435,6 +435,48 @@ jobs:
       - name: Check
         run: sh builder/verify-skills-locked.sh
 
+  cron-image:
+    name: Cron Image Build (no push)
+    runs-on: ubuntu-latest
+    # The db-mocker CronJob runs a SLIM image, not the agent one. Two things
+    # have to hold and neither is checked by building the agent image:
+    # the slim image still carries what its entrypoint reaches, and it has
+    # not quietly grown back into the full one.
+    #
+    # The closure check runs FIRST and cheaply — a drifted Dockerfile is
+    # worth knowing about without waiting for a build.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: The cron image must carry its entrypoint's closure
+        run: sh builder/verify-cron-image.sh
+
+      - name: Read version pins from /VERSIONS
+        id: version
+        run: |
+          set -euo pipefail
+          echo "KUBECTL_VERSION=$(grep '^KUBECTL_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build cron image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          # Context is builder/, so the COPY names the script directly — the
+          # same path the agent image uses.
+          context: ./builder
+          file: ./builder/cron/Dockerfile
+          push: false
+          load: true
+          tags: claw-mock-cron:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            KUBECTL_VERSION=${{ steps.version.outputs.KUBECTL_VERSION }}
+          platforms: linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   docker-build:
     # Build-test for the pod image on every PR. Build only — nothing is
     # pushed to ACR and nothing is deployed; the job exists so a broken

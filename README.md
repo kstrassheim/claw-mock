@@ -229,6 +229,36 @@ not carry a second ~150MB browser. The build renders a chart for real and
 fails if it cannot — checking that the package unpacked proves nothing, since
 this fails at render time with everything installed perfectly.
 
+## The CronJob runs its own image
+
+`k8s/050-db-mocker.yaml` fires hourly, and all it does is find the running
+claw-mock pod and `kubectl exec` the mock run into it. The work happens in the
+main pod — the agent runtime, the model calls and `sqlcmd` all live there.
+
+So it runs a **slim image of its own** (`builder/cron/Dockerfile`): alpine,
+bash, kubectl and `cron-mock-spawn`. Nothing else.
+
+It used to run the full agent image. That was defensible when the image was
+kubectl and sqlcmd; it stopped being defensible when chart rendering added
+chromium and its graphics libraries — several hundred megabytes pulled every
+hour by a pod that would never execute a browser.
+
+`mock-runner` is deliberately **not** in the cron image. It executes inside
+the main pod via `kubectl exec`, so it ships with the agent image and would be
+dead weight here.
+
+`builder/verify-cron-image.sh` (CI job **Cron Image Build**, and again before
+the push on deploy) derives the closure from `cron-mock-spawn` and checks it
+both ways: everything the entrypoint runs is installed, and nothing is
+installed that the entrypoint cannot reach — a slim image that grows back into
+the full one has lost the point of existing. It also pins `kubectl` to
+`KUBECTL_VERSION` rather than resolving `stable.txt` at build time, and fails
+if that drifts from `aks_version`: the client talks to that exact server, so
+the two are one decision.
+
+The deploy waits for **both** images before rolling out, or it would apply a
+CronJob whose image does not exist yet.
+
 ## Skills lockdown
 
 The bot has exactly one skill — `mocker`, defined in `k8s/050-db-mocker.yaml`

@@ -547,6 +547,67 @@ jobs:
           az logout
           rm -rf ~/.azure 2>/dev/null || true
 
+  build-and-push-cron-image:
+    name: Build and Push cron image to ACR
+    needs: tofu-apply
+    runs-on: ubuntu-latest
+    environment: dev
+    # The CronJob's own image: kubectl and a shell. Built separately from the
+    # agent image because it is a different closure with a different lifetime
+    # — it changes when cron-mock-spawn or the kubectl pin changes, and not
+    # when a skill or a model key does.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: The cron image must carry its entrypoint's closure
+        # Same check the pull request ran. Cheap, and it is the difference
+        # between "the CronJob stopped working" being found here or being
+        # found on the hour by nobody.
+        run: sh builder/verify-cron-image.sh
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Read version pins from /VERSIONS
+        id: version
+        run: |
+          set -euo pipefail
+          echo "KUBECTL_VERSION=$(grep '^KUBECTL_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build and push cron image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./builder
+          file: ./builder/cron/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/openclaw/claw-mock-cron:latest
+            ${{ env.REGISTRY }}/openclaw/claw-mock-cron:${{ steps.version.outputs.short_sha }}
+          build-args: |
+            KUBECTL_VERSION=${{ steps.version.outputs.KUBECTL_VERSION }}
+          platforms: linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Azure logout
+        if: always()
+        run: |
+          az logout
+          rm -rf ~/.azure 2>/dev/null || true
+
   deploy-to-aks:
     name: Deploy to AKS (apply manifests + rollout)
     # Only the image is a hard prerequisite. Applying the manifests and doing a
@@ -558,7 +619,7 @@ jobs:
     # Ordering against apply-secrets is not enforced: if the pods start first,
     # they wait in CreateContainerConfigError until claw-mock-secrets appears
     # and then start normally. Kubernetes reconciles it either way.
-    needs: [build-and-push-image]
+    needs: [build-and-push-image, build-and-push-cron-image]
     runs-on: ubuntu-latest
     environment: dev
     env:

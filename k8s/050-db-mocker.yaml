@@ -283,7 +283,12 @@ spec:
           restartPolicy: Never
           containers:
             - name: mocker
-              image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+              # The SLIM cron image, not the agent one. This pod does a pod
+              # lookup and a `kubectl exec`; the agent image carries the
+              # openclaw runtime, sqlcmd and — since charts — chromium and its
+              # graphics libraries, several hundred megabytes it would pull
+              # every hour and never run. See builder/cron/Dockerfile.
+              image: clwmockdevdev1.azurecr.io/openclaw/claw-mock-cron:latest
               imagePullPolicy: Always
               command: ["/usr/local/bin/cron-mock-spawn"]
               resources:
