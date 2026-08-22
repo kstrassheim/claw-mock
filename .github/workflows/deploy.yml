@@ -476,7 +476,12 @@ jobs:
   build-and-push-image:
     name: Build and Push Docker image to ACR
     needs: tofu-apply
-    runs-on: ubuntu-latest
+    # NATIVE arm64, not ubuntu-latest. This image is built for linux/arm64,
+    # and on an amd64 runner buildx does it through QEMU emulation — where
+    # chromium takes longer than puppeteer's 30s launch timeout and the
+    # mermaid smoke test fails on a machine that is merely slow. A native
+    # runner removes the emulation instead of raising the timeout to hide it.
+    runs-on: ubuntu-24.04-arm
     environment: dev
 
     steps:
@@ -550,7 +555,12 @@ jobs:
   build-and-push-cron-image:
     name: Build and Push cron image to ACR
     needs: tofu-apply
-    runs-on: ubuntu-latest
+    # NATIVE arm64, not ubuntu-latest. This image is built for linux/arm64,
+    # and on an amd64 runner buildx does it through QEMU emulation — where
+    # chromium takes longer than puppeteer's 30s launch timeout and the
+    # mermaid smoke test fails on a machine that is merely slow. A native
+    # runner removes the emulation instead of raising the timeout to hide it.
+    runs-on: ubuntu-24.04-arm
     environment: dev
     # The CronJob's own image: kubectl and a shell. Built separately from the
     # agent image because it is a different closure with a different lifetime

@@ -437,7 +437,12 @@ jobs:
 
   cron-image:
     name: Cron Image Build (no push)
-    runs-on: ubuntu-latest
+    # NATIVE arm64, not ubuntu-latest. This image is built for linux/arm64,
+    # and on an amd64 runner buildx does it through QEMU emulation — where
+    # chromium takes longer than puppeteer's 30s launch timeout and the
+    # mermaid smoke test fails on a machine that is merely slow. A native
+    # runner removes the emulation instead of raising the timeout to hide it.
+    runs-on: ubuntu-24.04-arm
     # The db-mocker CronJob runs a SLIM image, not the agent one. Two things
     # have to hold and neither is checked by building the agent image:
     # the slim image still carries what its entrypoint reaches, and it has
@@ -494,7 +499,12 @@ jobs:
     # skipping the environment keeps it out of any protection rules
     # attached to it.
     name: Docker Image Build (no push)
-    runs-on: ubuntu-latest
+    # NATIVE arm64, not ubuntu-latest. This image is built for linux/arm64,
+    # and on an amd64 runner buildx does it through QEMU emulation — where
+    # chromium takes longer than puppeteer's 30s launch timeout and the
+    # mermaid smoke test fails on a machine that is merely slow. A native
+    # runner removes the emulation instead of raising the timeout to hide it.
+    runs-on: ubuntu-24.04-arm
     # Gated on the static lockdown check. The dynamic half runs INSIDE the
     # image built here, so building at all is pointless while the repository
     # already fails the static one — and a green image build sitting next to a
