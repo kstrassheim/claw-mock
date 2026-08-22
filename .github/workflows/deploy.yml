@@ -59,7 +59,7 @@ jobs:
           echo "version=$(grep '^TOFU_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
 
       - name: Set up OpenTofu
-        uses: opentofu/setup-opentofu@v1
+        uses: opentofu/setup-opentofu@v2
         with:
           tofu_version: ${{ steps.tfver.outputs.version }}
           tofu_wrapper: true
@@ -183,7 +183,7 @@ jobs:
           echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
 
       - name: Download OpenTofu Output artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: tofu-output
           path: /tmp/tfout
@@ -245,7 +245,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Download OpenTofu Output artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: tofu-output
           path: /tmp/tfout
@@ -333,7 +333,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Download OpenTofu Output artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: tofu-output
           path: /tmp/tfout
@@ -484,7 +484,7 @@ jobs:
         run: az acr login --name ${{ env.ACR_NAME }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Ensure openclaw-base is mirrored from GHCR into ACR
         # The Dockerfile's FROM points at our ACR, so the base must exist
@@ -515,7 +515,7 @@ jobs:
           done
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./builder
           push: true
@@ -573,7 +573,7 @@ jobs:
             --admin
 
       - name: Download OpenTofu Output artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: tofu-output
           path: /tmp/tfout

@@ -40,7 +40,7 @@ jobs:
           echo "version=$(grep '^TOFU_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
 
       - name: Set up OpenTofu
-        uses: opentofu/setup-opentofu@v1
+        uses: opentofu/setup-opentofu@v2
         with:
           tofu_version: ${{ steps.tfver.outputs.version }}
           tofu_wrapper: true
@@ -232,7 +232,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Download dacpac artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: dacpacs
           path: /tmp/dacpacs
@@ -461,10 +461,10 @@ jobs:
           echo "GHCR_TAG=${UPSTREAM#v}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Docker image (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./builder
           push: false
