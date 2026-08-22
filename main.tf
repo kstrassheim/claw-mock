@@ -12,7 +12,11 @@ locals {
   cluster_name        = var.cluster_name
   location            = var.location
   namespace           = var.namespace
-  aks_version         = "1.35.3"
+  # Kept EQUAL to KUBECTL_VERSION in /VERSIONS -- the client the skill and the
+  # CronJob use talks to this exact server. 1.36 is generally available in
+  # westeurope (not preview); 1.36.2 is the newest patch AKS offers there, and
+  # a version AKS does not publish fails the apply rather than degrading.
+  aks_version = "1.36.2"
   # Renamed from "claw-mock-sql-${var.env}". The old name is stuck in an
   # Azure name-to-location reservation pointing at northeurope, left behind
   # by a create that failed there with ProvisioningDisabled. Every attempt to

@@ -230,8 +230,10 @@ jobs:
     needs: dacpac-build-deploy
     runs-on: ubuntu-latest
     environment: dev
-    env:
-      SQLCMD_VERSION: '1.8.2'
+    # SQLCMD_VERSION is NOT pinned here. These two jobs used to hardcode 1.8.2
+    # while VERSIONS said 1.10.0, so the runner and the image ran different
+    # clients against the same server, and the file that calls itself the
+    # single source of truth was not one. It is read from VERSIONS below.
 
     steps:
       - name: Checkout
@@ -249,6 +251,9 @@ jobs:
         with:
           name: tofu-output
           path: /tmp/tfout
+
+      - name: Read SQLCMD_VERSION from /VERSIONS
+        run: echo "SQLCMD_VERSION=$(grep '^SQLCMD_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_ENV
 
       - name: Install sqlcmd
         run: |
@@ -318,8 +323,10 @@ jobs:
     needs: dacpac-build-deploy
     runs-on: ubuntu-latest
     environment: dev
-    env:
-      SQLCMD_VERSION: '1.8.2'
+    # SQLCMD_VERSION is NOT pinned here. These two jobs used to hardcode 1.8.2
+    # while VERSIONS said 1.10.0, so the runner and the image ran different
+    # clients against the same server, and the file that calls itself the
+    # single source of truth was not one. It is read from VERSIONS below.
 
     steps:
       - name: Checkout
@@ -337,6 +344,9 @@ jobs:
         with:
           name: tofu-output
           path: /tmp/tfout
+
+      - name: Read SQLCMD_VERSION from /VERSIONS
+        run: echo "SQLCMD_VERSION=$(grep '^SQLCMD_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_ENV
 
       - name: Install sqlcmd
         # go-sqlcmd from its GitHub release. The `sqlcmd` apt package is not in
