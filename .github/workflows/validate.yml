@@ -453,6 +453,13 @@ jobs:
     # attached to it.
     name: Docker Image Build (no push)
     runs-on: ubuntu-latest
+    # Gated on the static lockdown check. The dynamic half runs INSIDE the
+    # image built here, so building at all is pointless while the repository
+    # already fails the static one — and a green image build sitting next to a
+    # red lockdown check reads as "the image is fine", which is the wrong
+    # impression to leave on a supply-chain control.
+    needs:
+      - skills-lockdown
 
     steps:
       - name: Checkout
