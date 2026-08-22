@@ -102,6 +102,13 @@ jobs:
           # These TF_VAR_* feed the key provider's use_oidc/client_id/tenant_id.
           # The OIDC request URL and token are picked up automatically from the
           # runner's ACTIONS_ID_TOKEN_REQUEST_* vars (permissions: id-token: write).
+          # Two consumers, two mechanisms, both required:
+          #   ARM_USE_OIDC / ARM_USE_CLI  -> azurerm backend and provider
+          #   TF_VAR_*                    -> azure_vault key provider (block args only)
+          # Drop either and that consumer falls back to AzureCLICredential, which
+          # fails: "Please specify only one of subscription and tenant, not both".
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+          echo "ARM_USE_CLI=false" >> $GITHUB_ENV
           echo "TF_VAR_use_oidc=true" >> $GITHUB_ENV
           echo "TF_VAR_arm_client_id=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
           echo "TF_VAR_arm_tenant_id=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
