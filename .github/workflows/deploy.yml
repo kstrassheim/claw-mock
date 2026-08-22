@@ -1,7 +1,7 @@
 name: Deploy (Push to main)
 
 # Runs on every merge to main. Four jobs:
-#   1. terraform-apply       — provision/update Azure infra (AKS, ACR, SQL)
+#   1. tofu-apply       — provision/update Azure infra (AKS, ACR, SQL)
 #   2. dacpac-build-deploy   — build both dacpacs and publish them onto the
 #                              Azure SQL server (schema + seed data)
 #   3. build-and-push-image  — build the claw-mock image, push :latest+:sha
@@ -11,7 +11,7 @@ name: Deploy (Push to main)
 # step short-circuits the rest before it can do damage.
 #
 # `workflow_dispatch` exists for the initial bootstrap: the very first
-# apply creates the AKS cluster that later terraform-plan runs rely on.
+# apply creates the AKS cluster that later tofu-plan runs rely on.
 
 on:
   push:
@@ -44,8 +44,8 @@ permissions:
   contents: read
 
 jobs:
-  terraform-apply:
-    name: Terraform Apply
+  tofu-apply:
+    name: OpenTofu Apply
     runs-on: ubuntu-latest
     environment: dev
 
@@ -53,16 +53,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Read TERRAFORM_VERSION from /VERSIONS
+      - name: Read TOFU_VERSION from /VERSIONS
         id: tfver
         run: |
-          echo "version=$(grep '^TERRAFORM_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "version=$(grep '^TOFU_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: ${{ steps.tfver.outputs.version }}
-          terraform_wrapper: true
+          tofu_version: ${{ steps.tfver.outputs.version }}
+          tofu_wrapper: true
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -87,37 +87,55 @@ jobs:
             echo "::notice::AKS cluster claw-mock-aks does not exist yet (first bootstrap run) — skipping kubeconfig fetch"
           fi
 
-      - name: Set Terraform environment variables
+      - name: Set OpenTofu environment variables
         run: |
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_USE_AZUREAD_AUTH=true" >> $GITHUB_ENV
+          # The azure_vault state-encryption key provider does NOT read ARM_USE_OIDC
+          # / ARM_USE_CLI / ARM_CLIENT_ID / ARM_TENANT_ID -- unlike the backend and
+          # the azurerm provider, it only takes these as block arguments. Left to
+          # itself it falls through to AzureCLICredential, which runs
+          # `az account get-access-token` with both --subscription and --tenant and
+          # fails: "Please specify only one of subscription and tenant, not both".
+          # These TF_VAR_* feed the key provider's use_oidc/client_id/tenant_id.
+          # The OIDC request URL and token are picked up automatically from the
+          # runner's ACTIONS_ID_TOKEN_REQUEST_* vars (permissions: id-token: write).
+          # Two consumers, two mechanisms, both required:
+          #   ARM_USE_OIDC / ARM_USE_CLI  -> azurerm backend and provider
+          #   TF_VAR_*                    -> azure_vault key provider (block args only)
+          # Drop either and that consumer falls back to AzureCLICredential, which
+          # fails: "Please specify only one of subscription and tenant, not both".
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+          echo "ARM_USE_CLI=false" >> $GITHUB_ENV
+          echo "TF_VAR_use_oidc=true" >> $GITHUB_ENV
+          echo "TF_VAR_arm_client_id=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "TF_VAR_arm_tenant_id=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "TF_VAR_env=dev" >> $GITHUB_ENV
 
-      - name: Terraform Init
+      - name: OpenTofu Init
         run: |
-          terraform init \
+          tofu init \
             -backend-config="resource_group_name=terraform" \
             -backend-config="storage_account_name=mytofustates" \
-            -backend-config="container_name=claw-mock" \
             -backend-config="key=dev.tfstate" \
             -backend-config="use_azuread_auth=true"
 
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
+      - name: OpenTofu Plan
+        run: tofu plan -out=tfplan
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+      - name: OpenTofu Apply
+        run: tofu apply -auto-approve tfplan
 
-      - name: Upload Terraform Output
-        run: terraform output -json > terraform_output.json
+      - name: Upload OpenTofu Output
+        run: tofu output -json > tofu_output.json
 
-      - name: Upload Terraform Output artifact
+      - name: Upload OpenTofu Output artifact
         uses: actions/upload-artifact@v6
         with:
-          name: terraform-output
-          path: terraform_output.json
+          name: tofu-output
+          path: tofu_output.json
           retention-days: 30
 
       - name: Azure logout
@@ -127,13 +145,13 @@ jobs:
           rm -rf ~/.azure 2>/dev/null || true
 
   dacpac-build-deploy:
-    # After terraform: build both .sqlproj into dacpacs and publish them
+    # After OpenTofu: build both .sqlproj into dacpacs and publish them
     # onto the Azure SQL server — schema, FKs and post-deployment seed
     # data. The SQL server is Entra-only; the deploy identity is a
     # member of the SQL Entra-admin group, so sqlpackage authenticates
     # as "Active Directory Default" (az login session).
     name: Dacpac Build + Deploy to Azure SQL
-    needs: terraform-apply
+    needs: tofu-apply
     runs-on: ubuntu-latest
     environment: dev
 
@@ -164,10 +182,10 @@ jobs:
           dotnet tool install --global microsoft.sqlpackage
           echo "$HOME/.dotnet/tools" >> $GITHUB_PATH
 
-      - name: Download Terraform Output artifact
+      - name: Download OpenTofu Output artifact
         uses: actions/download-artifact@v6
         with:
-          name: terraform-output
+          name: tofu-output
           path: /tmp/tfout
 
       # Authentication and Encrypt are connection-string settings, not DacFx
@@ -178,7 +196,7 @@ jobs:
       - name: Publish AdventureWorks dacpac
         run: |
           set -euo pipefail
-          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/tofu_output.json)
           sqlpackage /a:Publish \
             /sf:database/AdventureWorks/bin/Release/net8.0/AdventureWorks.dacpac \
             /tcs:"Server=tcp:${SQL_FQDN},1433;Initial Catalog=AdventureWorks;Authentication=Active Directory Default;Encrypt=True"
@@ -186,7 +204,7 @@ jobs:
       - name: Publish Northwind dacpac
         run: |
           set -euo pipefail
-          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/tofu_output.json)
           sqlpackage /a:Publish \
             /sf:database/Northwind/bin/Release/net8.0/Northwind.dacpac \
             /tcs:"Server=tcp:${SQL_FQDN},1433;Initial Catalog=Northwind;Authentication=Active Directory Default;Encrypt=True"
@@ -226,10 +244,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Download Terraform Output artifact
+      - name: Download OpenTofu Output artifact
         uses: actions/download-artifact@v6
         with:
-          name: terraform-output
+          name: tofu-output
           path: /tmp/tfout
 
       - name: Install sqlcmd
@@ -245,9 +263,9 @@ jobs:
       - name: Seed each empty database
         run: |
           set -euo pipefail
-          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/tofu_output.json)
 
-          for DB in $(jq -r '.sql_databases.value[]' /tmp/tfout/terraform_output.json); do
+          for DB in $(jq -r '.sql_databases.value[]' /tmp/tfout/tofu_output.json); do
             SEED="seed/${DB}.sql"
             if [ ! -f "$SEED" ]; then
               echo "::notice::no $SEED — nothing to seed for $DB"
@@ -286,10 +304,10 @@ jobs:
 
   grant-sql-access:
     # Database access for the pod's managed identity. This cannot be expressed
-    # in Terraform — on an Entra-only server it is T-SQL run against the
+    # in OpenTofu — on an Entra-only server it is T-SQL run against the
     # server — so it lives in init-sql-permissions.sql.
     #
-    # Runs after dacpac-build-deploy, not after terraform-apply: a dacpac
+    # Runs after dacpac-build-deploy, not after tofu-apply: a dacpac
     # publish reconciles database objects against the package, so grants made
     # before it are not guaranteed to survive. Doing it last means the final
     # state of every database is the one the bot actually connects to.
@@ -314,10 +332,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Download Terraform Output artifact
+      - name: Download OpenTofu Output artifact
         uses: actions/download-artifact@v6
         with:
-          name: terraform-output
+          name: tofu-output
           path: /tmp/tfout
 
       - name: Install sqlcmd
@@ -336,10 +354,10 @@ jobs:
       - name: Grant pod identity on server and databases
         run: |
           set -euo pipefail
-          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
-          POD_IDENTITY=$(jq -r '.pod_identity_name.value' /tmp/tfout/terraform_output.json)
+          SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/tofu_output.json)
+          POD_IDENTITY=$(jq -r '.pod_identity_name.value' /tmp/tfout/tofu_output.json)
           if [ -z "$POD_IDENTITY" ] || [ "$POD_IDENTITY" = "null" ]; then
-            echo "::error::pod_identity_name missing from terraform output"
+            echo "::error::pod_identity_name missing from tofu output"
             exit 1
           fi
           sqlcmd --version
@@ -347,7 +365,7 @@ jobs:
           # master first — that is the server-level user — then every mock
           # database, where the role membership (db_datawriter + db_datareader)
           # is granted.
-          DBS="master $(jq -r '.sql_databases.value | join(" ")' /tmp/tfout/terraform_output.json)"
+          DBS="master $(jq -r '.sql_databases.value | join(" ")' /tmp/tfout/tofu_output.json)"
           for DB in $DBS; do
             echo "::group::Granting $POD_IDENTITY on $DB"
             sed "s/__POD_IDENTITY_NAME__/${POD_IDENTITY}/g" \
@@ -371,12 +389,12 @@ jobs:
     # triggers on changes to itself, so a normal deploy never applied the
     # secret and the bot started without its credentials.
     #
-    # Depends only on terraform-apply (the cluster must exist), so it runs in
+    # Depends only on tofu-apply (the cluster must exist), so it runs in
     # parallel with the dacpac and image jobs. The manifest is piped straight
     # from `kubectl create -o yaml` into `kubectl apply -f -` and never
     # touches git.
     name: Apply claw-mock-secrets to cluster
-    needs: terraform-apply
+    needs: tofu-apply
     runs-on: ubuntu-latest
     environment: dev
     env:
@@ -447,7 +465,7 @@ jobs:
 
   build-and-push-image:
     name: Build and Push Docker image to ACR
-    needs: terraform-apply
+    needs: tofu-apply
     runs-on: ubuntu-latest
     environment: dev
 
@@ -554,10 +572,10 @@ jobs:
             --file /tmp/kubeconfig \
             --admin
 
-      - name: Download Terraform Output artifact
+      - name: Download OpenTofu Output artifact
         uses: actions/download-artifact@v6
         with:
-          name: terraform-output
+          name: tofu-output
           path: /tmp/tfout
 
       - name: Install kubectl
@@ -586,9 +604,9 @@ jobs:
           # The pod identity, not the deploy identity. The deploy identity is
           # Owner on the resource group and can write the Terraform state;
           # the bot must not inherit either.
-          CLIENT_ID=$(jq -r '.pod_identity_client_id.value' /tmp/tfout/terraform_output.json)
+          CLIENT_ID=$(jq -r '.pod_identity_client_id.value' /tmp/tfout/tofu_output.json)
           if [ -z "$CLIENT_ID" ] || [ "$CLIENT_ID" = "null" ]; then
-            echo "::error::pod_identity_client_id missing from terraform output"
+            echo "::error::pod_identity_client_id missing from tofu output"
             exit 1
           fi
           kubectl -n claw-mock annotate serviceaccount claw-mock \

@@ -27,10 +27,49 @@ terraform {
   backend "azurerm" {
     resource_group_name  = "terraform"
     storage_account_name = "mytofustates"
-    container_name       = "claw-mock"
+    container_name       = var.app_name
     key                  = "dev.tfstate"
     use_azuread_auth     = true
   }
+
+  # ---------------------------------------------------------------------------
+  # State encryption. The data key that actually encrypts the state is generated
+  # per run and wrapped with the RSA key `claw-mock` in the kv-mytofustates
+  # Key Vault (envelope encryption) — the key material never leaves the vault.
+  #
+  # vault_key_name is var.app_name, so the key object name and the project name
+  # are the same string by construction. Variables are legal here because they
+  # resolve at `tofu init`, before state exists; data sources and provider
+  # functions are not.
+  #
+  # NOTE: HashiCorp Terraform cannot read this state. This project is OpenTofu
+  # only from here on — the CI workflows use opentofu/setup-opentofu.
+  # ---------------------------------------------------------------------------
+  encryption {
+    key_provider "azure_vault" "state" {
+      vault_uri      = "https://kv-mytofustates.vault.azure.net"
+      vault_key_name = var.app_name
+      key_length     = 32
+
+      use_oidc  = var.use_oidc
+      use_cli   = !var.use_oidc
+      client_id = var.arm_client_id
+      tenant_id = var.arm_tenant_id
+    }
+
+    method "aes_gcm" "state" {
+      keys = key_provider.azure_vault.state
+    }
+
+    state {
+      method = method.aes_gcm.state
+    }
+
+    plan {
+      method = method.aes_gcm.state
+    }
+  }
+
 }
 
 provider "azurerm" {

@@ -108,14 +108,14 @@ The `claw-mock-db` secret carries only the server FQDN and the database names.
 `.github/workflows/deploy.yml` runs on merge to `main`:
 
 ```
-terraform-apply
+tofu-apply
 ├── dacpac-build-deploy ──┬─→ seed-databases
 │                         └─→ grant-sql-access
 ├── apply-secrets
 └── build-and-push-image ──→ deploy-to-aks
 ```
 
-- **terraform-apply** — AKS, ACR, storage, SQL server and both databases.
+- **tofu-apply** — AKS, ACR, storage, SQL server and both databases.
 - **dacpac-build-deploy** — builds both `.sqlproj` and publishes **schema only**
   to Azure SQL. The dacpacs carry no seed data.
 - **seed-databases** — applies `seed/<database>.sql`, but only to a database

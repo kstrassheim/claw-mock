@@ -1,3 +1,23 @@
+variable "app_name" {
+  description = <<-EOT
+    Canonical project name, and the single source of truth for three things
+    that must agree:
+
+      * the blob container in the mytofustates storage account holding this
+        project's state (backend.container_name),
+      * the RSA key in the kv-mytofustates Key Vault that wraps the state
+        encryption data key (encryption.key_provider.vault_key_name),
+      * the project name itself.
+
+    Referencing a variable from the backend block is OpenTofu-only (early
+    evaluation, resolved at `tofu init` before state exists) — HashiCorp
+    Terraform cannot parse it. That is already true of the encryption block
+    above it, so this adds no new constraint.
+  EOT
+  default     = "claw-mock"
+  type        = string
+}
+
 variable "env" {
   description = "Environment name"
   default     = "dev"
@@ -98,4 +118,34 @@ variable "unique_suffix" {
   description = "Unique suffix appended to globally-unique resource names (max 4 chars, e.g. 'dev1'). Used to make the ACR name unique across deployments."
   type        = string
   default     = "dev1"
+}
+
+variable "use_oidc" {
+  description = <<-EOT
+    Authenticate the azure_vault state-encryption key provider with a GitHub
+    OIDC token instead of the Azure CLI. Defaults to false so local runs use
+    your `az login` session; CI sets TF_VAR_use_oidc=true.
+
+    This has to be a block argument on the key provider. The provider does NOT
+    read ARM_USE_OIDC / ARM_USE_CLI / ARM_CLIENT_ID / ARM_TENANT_ID from the
+    environment the way the backend and the azurerm provider do -- setting
+    those has no effect on it, and it silently falls through to
+    AzureCLICredential, which then runs `az account get-access-token` with both
+    --subscription and --tenant and fails with:
+      ERROR: Please specify only one of subscription and tenant, not both
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "arm_client_id" {
+  description = "Client ID for the key provider when use_oidc is true. Empty locally; CI sets TF_VAR_arm_client_id."
+  type        = string
+  default     = ""
+}
+
+variable "arm_tenant_id" {
+  description = "Tenant ID for the key provider when use_oidc is true. Empty locally; CI sets TF_VAR_arm_tenant_id."
+  type        = string
+  default     = ""
 }
