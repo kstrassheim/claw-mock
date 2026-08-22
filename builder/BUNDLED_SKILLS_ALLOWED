@@ -1,0 +1,17 @@
+# Upstream openclaw skills to KEEP in the built image.
+#
+# THIS LIST IS EMPTY, ON PURPOSE.
+#
+# This bot has exactly one skill — `mocker` — and it is defined in this
+# repository, in k8s/050-db-mocker.yaml, mounted from the
+# claw-mock-skill-mocker ConfigMap. That is the one it is supposed to have and
+# the only one anybody reviewed. Everything openclaw bundles at /app/skills is
+# capability the agent was never granted through a pull request.
+#
+# The image used to strip two of them by name — `mcporter` and
+# `skill-creator` — and keep the rest. That is the wrong way round: an
+# upstream release that adds another one ships it to the agent silently, and
+# nobody finds out until it is used.
+#
+# Add a name here only with a reason, and only in a pull request that says
+# what the bot needs it for.

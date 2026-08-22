@@ -99,6 +99,26 @@ spec:
               mkdir -p /home/node/.openclaw/workspace/skills/mocker
               chown -R 1000:1000 /home/node/.openclaw
               chmod -R u+rwX,g+rwX /home/node/.openclaw
+
+              # SKILLS LOCKDOWN. Everything above hands the whole state
+              # directory to the agent, workspace/skills/ included — so the
+              # bot could create a skill directory at runtime and openclaw
+              # would load it. A skill is just instructions the agent
+              # follows, so one it wrote for itself is the shortest way
+              # around every other control here.
+              #
+              # This MUST run after the recursive chown, not before: the
+              # chown would hand the directories straight back and the
+              # manifest would still read as though they were locked.
+              #
+              # Fails CLOSED. If the binary is missing the image is not the
+              # one we think it is, and starting anyway would leave the
+              # directories writable with nothing reporting it.
+              if [ ! -x /usr/local/bin/lock-skill-dirs ]; then
+                echo "FATAL: lock-skill-dirs missing from the image — refusing to start" >&2
+                exit 1
+              fi
+              /usr/local/bin/lock-skill-dirs
           volumeMounts:
             - name: workspace
               mountPath: /home/node/.openclaw
