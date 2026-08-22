@@ -16,8 +16,8 @@ inserted, updated and deleted, grouped by database and by fact/dimension.
 
 ## Prerequisites
 
-Terraform provisions the infrastructure, but a number of Entra objects must
-exist **before** the first deploy. Terraform references them through `data`
+OpenTofu provisions the infrastructure, but a number of Entra objects must
+exist **before** the first deploy. OpenTofu references them through `data`
 sources and never creates or modifies them, so a missing one fails the run.
 
 ### Managed identities
@@ -28,23 +28,23 @@ pod at runtime via AKS workload identity.
 | Permission | Scope | Why |
 | --- | --- | --- |
 | Owner | resource group `claw-mock-dev` | create AKS, ACR, storage, SQL |
-| Storage Blob Data Contributor | container `claw-mock` on storage account `mytofustates` | read/write the Terraform state (the backend uses `use_azuread_auth`, so no account keys) |
-| Directory Readers | tenant | Terraform looks the Entra groups up by display name (`azuread_group` data sources); without it `terraform plan` fails with a Graph 403 |
+| Storage Blob Data Contributor | container `claw-mock` on storage account `mytofustates` | read/write the OpenTofu state (the backend uses `use_azuread_auth`, so no account keys) |
+| Directory Readers | tenant | OpenTofu looks the Entra groups up by display name (`azuread_group` data sources); without it `tofu plan` fails with a Graph 403 |
 | Member of `local-data-admins-claw-mock-dev` | — | makes it admin on the SQL server, which is how the pipeline publishes dacpacs and runs `init-sql-permissions.sql` |
 
 It also needs a **federated credential** for GitHub OIDC with subject
 `repo:<owner>/claw-mock:environment:dev`. The second federated credential, for
-AKS workload identity, is created by Terraform.
+AKS workload identity, is created by OpenTofu.
 
-`AcrPull` is granted by Terraform — it is not a prerequisite.
+`AcrPull` is granted by OpenTofu — it is not a prerequisite.
 
 **`claw-mock-pod-<env>`** — the identity the bot pod runs as. **Created by
-Terraform, not a prerequisite.**
+OpenTofu, not a prerequisite.**
 
 It deliberately holds **no Azure RBAC at all**. Its only privileges are the
 database roles `init-sql-permissions.sql` grants it (`db_datawriter` +
 `db_datareader`). It is separate from the deploy identity on purpose: the
-deploy identity is Owner on the resource group and can rewrite the Terraform
+deploy identity is Owner on the resource group and can rewrite the OpenTofu
 state, and a bot whose job is inserting rows into two databases must not
 inherit that. The federated credential for
 `system:serviceaccount:claw-mock:claw-mock` sits on this identity, and the
@@ -84,7 +84,8 @@ to any workload.
 No password exists anywhere in this project.
 
 - **Pipeline → Azure**: OIDC federated credential on the deploy identity.
-- **Terraform → state**: Entra auth on the storage container.
+- **OpenTofu → state**: Entra auth on the storage container, and the state
+  itself is encrypted with a Key Vault key (see below).
 - **Pipeline → SQL**: the deploy identity is a member of the SQL admin group;
   `sqlpackage` and `sqlcmd` use `Active Directory Default`.
 - **Bot pod → SQL**: AKS workload identity as `claw-mock-pod-<env>`, which has
@@ -155,3 +156,27 @@ not work: `switzerlandnorth` could not provision the AKS node size, and
 The node pool is arm64 (`Standard_D2pds_v5`) and the image is built for
 `linux/arm64`. Those two are one decision — changing either without the other
 leaves the pod unschedulable.
+
+## State encryption
+
+State lives in the `claw-mock` container of the `mytofustates` storage account
+and is **encrypted by OpenTofu itself**, on top of Azure's storage encryption. A
+fresh AES-GCM data key is generated per run and wrapped with the RSA key
+`claw-mock` in the `kv-mytofustates` Key Vault, so key material never leaves the
+vault.
+
+- **HashiCorp Terraform cannot read this state.** Use `tofu`. The pipelines pin
+  OpenTofu via `TOFU_VERSION` in `VERSIONS`.
+- `var.app_name` is the single source of truth for both the state blob
+  container and the Key Vault key name; the backend reads it directly, which
+  relies on OpenTofu early evaluation and is not parseable by Terraform.
+- `deploy-claw-mock-dev` holds `Key Vault Crypto User` scoped to that **single
+  key object**, not to the vault, so it cannot decrypt another project's state.
+
+Locally the key provider authenticates through your `az login` session. CI uses
+GitHub OIDC, which needs `TF_VAR_use_oidc=true` plus `TF_VAR_arm_client_id` /
+`TF_VAR_arm_tenant_id`. Those are separate from `ARM_USE_OIDC` / `ARM_USE_CLI`,
+which configure the backend and the azurerm provider — the key provider does not
+read `ARM_*` at all. The pipelines set both; if only one is set, that consumer
+falls back to the Azure CLI credential and fails with *"Please specify only one
+of subscription and tenant, not both"*.
