@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# mock-erd: print a mermaid erDiagram for one of the mock databases.
+#
+# WHY THIS IS A SCRIPT AND NOT AN INSTRUCTION IN THE SKILL
+# --------------------------------------------------------
+# The agent could be told to "query INFORMATION_SCHEMA and write mermaid", and
+# it would — differently every time. An ER diagram is a FACT about the schema,
+# so two runs a minute apart must produce the same picture or the diagram is
+# decoration. The query and the formatting therefore live here, where they can
+# be read and fixed, rather than being re-derived per turn.
+#
+# Output is mermaid SOURCE on stdout. Rendering is a separate concern:
+#
+#   mock-erd AdventureWorks                     # the source
+#   mock-erd AdventureWorks | mermaid-render                    # PNG
+#   mock-erd Northwind | mermaid-render --format svg            # SVG
+#
+# WHAT IT READS
+# INFORMATION_SCHEMA only — table names, column names, types, and the foreign
+# keys between them. No row data ever leaves the database through this, which
+# is what makes it safe to paste the output into a chat channel.
+set -euo pipefail
+
+DB="${1:-}"
+if [ -z "$DB" ]; then
+  echo "usage: mock-erd <database>   (e.g. AdventureWorks, Northwind)" >&2
+  exit 2
+fi
+
+: "${SQL_SERVER_FQDN:?SQL_SERVER_FQDN is not set — see TOOLS.md}"
+: "${SQL_BOT_CLIENT_ID:?SQL_BOT_CLIENT_ID is not set — see TOOLS.md}"
+
+# -h-1 -W: no header rule, trimmed columns. Both matter — the default output
+# is padded to fixed width and would put spaces inside every identifier.
+run_sql() {
+  AZURE_CLIENT_ID="${SQL_BOT_CLIENT_ID}" \
+  sqlcmd -S "tcp:${SQL_SERVER_FQDN},1433" -d "$DB" \
+         --authentication-method=ActiveDirectoryDefault \
+         -l 30 -N -C -h-1 -W -s '|' -Q "$1"
+}
+
+# Columns, one row per column, in table order. The type is rendered as a bare
+# mermaid identifier: mermaid's erDiagram grammar does not accept the
+# parentheses in `varchar(50)`, and a chart that fails to parse is worse than
+# one without types.
+COLS="$(run_sql "
+SET NOCOUNT ON;
+SELECT c.TABLE_NAME + '|' +
+       REPLACE(REPLACE(c.DATA_TYPE, '(', '_'), ')', '') + '|' +
+       c.COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS c
+JOIN INFORMATION_SCHEMA.TABLES t
+  ON t.TABLE_NAME = c.TABLE_NAME AND t.TABLE_SCHEMA = c.TABLE_SCHEMA
+WHERE t.TABLE_TYPE = 'BASE TABLE'
+ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION;")"
+
+# Foreign keys, as parent -> child. Mermaid wants the relationship line, and
+# the cardinality it can actually know is "many children to one parent".
+FKS="$(run_sql "
+SET NOCOUNT ON;
+SELECT pt.name + '|' + ct.name + '|' + fk.name
+FROM sys.foreign_keys fk
+JOIN sys.tables pt ON pt.object_id = fk.referenced_object_id
+JOIN sys.tables ct ON ct.object_id = fk.parent_object_id
+ORDER BY pt.name, ct.name;")"
+
+echo "erDiagram"
+
+printf '%s\n' "$COLS" | awk -F'|' '
+  NF < 3 { next }
+  $1 != last { if (last != "") print "  }"; print "  " $1 " {"; last = $1 }
+  { print "    " $2 " " $3 }
+  END { if (last != "") print "  }" }
+'
+
+printf '%s\n' "$FKS" | awk -F'|' '
+  NF < 3 { next }
+  # }o--|| : many on the child side, exactly one on the parent side.
+  { print "  " $1 " ||--o{ " $2 " : \"" $3 "\"" }
+'

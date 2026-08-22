@@ -181,6 +181,84 @@ read `ARM_*` at all. The pipelines set both; if only one is set, that consumer
 falls back to the Azure CLI credential and fails with *"Please specify only one
 of subscription and tenant, not both"*.
 
+## Charts and ER diagrams
+
+The bot can draw the schema of a mock database, in **PNG, SVG or mermaid**.
+
+```bash
+mock-erd AdventureWorks                          # mermaid source
+mock-erd AdventureWorks | mermaid-render         # PNG, prints the path
+mock-erd Northwind | mermaid-render --format svg # SVG
+```
+
+`mock-erd` reads `INFORMATION_SCHEMA` only — tables, columns, types and the
+foreign keys between them. **No row data leaves the database through it**,
+which is what makes the output safe to paste into a chat channel.
+
+The query and the formatting live in the script rather than in the skill on
+purpose. An ER diagram is a *fact* about the schema: told to "query
+INFORMATION_SCHEMA and write mermaid", the agent would — differently every
+time, and two runs a minute apart would disagree about the same database.
+
+Which format depends on the destination. The chat channel does **not** draw
+mermaid: a mermaid block arrives there as a code fence, which reads as the
+answer having failed. So PNG is the default for chat, while the mermaid source
+stays the right thing to paste anywhere that renders it — a pull request, for
+instance.
+
+That choice is a **setting, not a per-call flag**, so it is answered once
+rather than argued about every time somebody asks for a diagram. The `mocker`
+skill exposes it as `chart-format`, and it is a flag file whose contents are
+the mode:
+
+```bash
+cat $HOME/.openclaw/.chart-format   # status; absent means png
+echo svg > $HOME/.openclaw/.chart-format
+rm -f $HOME/.openclaw/.chart-format # back to the default
+```
+
+In `mermaid` mode the bot does not call the renderer at all — it posts the
+source. Asking for one chart in another format is still fine and does not
+change the setting.
+
+Rendering needs a headless browser, so the image installs chromium and
+`fonts-liberation`; without the font the render silently degrades to boxes,
+which looks like a broken diagram rather than a missing package. puppeteer is
+pointed at that same chromium (`PUPPETEER_SKIP_DOWNLOAD`), so the image does
+not carry a second ~150MB browser. The build renders a chart for real and
+fails if it cannot — checking that the package unpacked proves nothing, since
+this fails at render time with everything installed perfectly.
+
+## The CronJob runs its own image
+
+`k8s/050-db-mocker.yaml` fires hourly, and all it does is find the running
+claw-mock pod and `kubectl exec` the mock run into it. The work happens in the
+main pod — the agent runtime, the model calls and `sqlcmd` all live there.
+
+So it runs a **slim image of its own** (`builder/cron/Dockerfile`): alpine,
+bash, kubectl and `cron-mock-spawn`. Nothing else.
+
+It used to run the full agent image. That was defensible when the image was
+kubectl and sqlcmd; it stopped being defensible when chart rendering added
+chromium and its graphics libraries — several hundred megabytes pulled every
+hour by a pod that would never execute a browser.
+
+`mock-runner` is deliberately **not** in the cron image. It executes inside
+the main pod via `kubectl exec`, so it ships with the agent image and would be
+dead weight here.
+
+`builder/verify-cron-image.sh` (CI job **Cron Image Build**, and again before
+the push on deploy) derives the closure from `cron-mock-spawn` and checks it
+both ways: everything the entrypoint runs is installed, and nothing is
+installed that the entrypoint cannot reach — a slim image that grows back into
+the full one has lost the point of existing. It also pins `kubectl` to
+`KUBECTL_VERSION` rather than resolving `stable.txt` at build time, and fails
+if that drifts from `aks_version`: the client talks to that exact server, so
+the two are one decision.
+
+The deploy waits for **both** images before rolling out, or it would apply a
+CronJob whose image does not exist yet.
+
 ## Skills lockdown
 
 The bot has exactly one skill — `mocker`, defined in `k8s/050-db-mocker.yaml`
