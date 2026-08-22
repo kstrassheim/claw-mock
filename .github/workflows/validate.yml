@@ -1,7 +1,7 @@
 name: Validate (Pull Request)
 
 # Runs on every PR to main. Independent validation jobs in parallel:
-#   - terraform-plan       : init, validate, plan against current main state
+#   - tofu-plan       : init, validate, plan against current main state
 #   - dacpac-build         : build both .sqlproj into .dacpac artifacts
 #   - dacpac-deploy-test   : publish both dacpacs onto an ephemeral
 #                            SQL Server in docker-in-docker (dind)
@@ -25,8 +25,8 @@ permissions:
   contents: read
 
 jobs:
-  terraform-plan:
-    name: Terraform Plan
+  tofu-plan:
+    name: OpenTofu Plan
     runs-on: ubuntu-latest
     environment: dev
 
@@ -92,15 +92,25 @@ jobs:
           EOF
           fi
 
-      - name: Set Terraform environment variables
+      - name: Set OpenTofu environment variables
         run: |
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_USE_AZUREAD_AUTH=true" >> $GITHUB_ENV
+          # Authenticate the azure_vault state-encryption key provider by GitHub
+          # OIDC rather than by the Azure CLI. ARM_USE_CLI defaults to true, so
+          # without this the credential chain falls through to AzureCLICredential,
+          # which runs `az account get-access-token` with both --subscription and
+          # --tenant set and dies with:
+          #   ERROR: Please specify only one of subscription and tenant, not both
+          # OpenTofu picks the OIDC request URL/token up from the runner's
+          # ACTIONS_ID_TOKEN_REQUEST_* vars automatically (permissions: id-token: write).
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+          echo "ARM_USE_CLI=false" >> $GITHUB_ENV
           echo "TF_VAR_env=dev" >> $GITHUB_ENV
 
-      - name: Terraform Init
+      - name: OpenTofu Init
         run: |
           tofu init \
             -backend-config="resource_group_name=terraform" \
@@ -108,22 +118,22 @@ jobs:
             -backend-config="key=dev.tfstate" \
             -backend-config="use_azuread_auth=true"
 
-      - name: Terraform Validate
+      - name: OpenTofu Validate
         run: tofu validate
 
-      - name: Terraform Plan
+      - name: OpenTofu Plan
         run: tofu plan -out=tfplan
 
-      - name: Upload Terraform Plan artifact
+      - name: Upload OpenTofu Plan artifact
         uses: actions/upload-artifact@v6
         with:
-          name: terraform-plan
+          name: tofu-plan
           path: tfplan
           retention-days: 7
 
       - name: Plan Summary
         run: |
-          echo "## Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## OpenTofu Plan Summary" >> $GITHUB_STEP_SUMMARY
           tofu show --json tfplan 2>/dev/null | \
             jq -r '[
               (.resources | length) as $total |
