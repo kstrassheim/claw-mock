@@ -177,7 +177,7 @@ resource "azurerm_federated_identity_credential" "claw_mock_workload" {
 resource "kubernetes_network_policy_v1" "default_deny_all" {
   metadata {
     name      = "default-deny-all"
-    namespace = local.namespace
+    namespace = kubernetes_namespace.claw-mock.metadata[0].name
   }
   spec {
     pod_selector {}
@@ -189,7 +189,7 @@ resource "kubernetes_network_policy_v1" "default_deny_all" {
 resource "kubernetes_network_policy_v1" "allow_dns" {
   metadata {
     name      = "allow-dns"
-    namespace = local.namespace
+    namespace = kubernetes_namespace.claw-mock.metadata[0].name
   }
   spec {
     pod_selector {}
@@ -219,7 +219,7 @@ resource "kubernetes_network_policy_v1" "allow_dns" {
 resource "kubernetes_network_policy_v1" "allow_https" {
   metadata {
     name      = "allow-https"
-    namespace = local.namespace
+    namespace = kubernetes_namespace.claw-mock.metadata[0].name
   }
   spec {
     pod_selector {}
@@ -238,7 +238,7 @@ resource "kubernetes_network_policy_v1" "allow_https" {
 resource "kubernetes_network_policy_v1" "allow_mssql" {
   metadata {
     name      = "allow-mssql"
-    namespace = local.namespace
+    namespace = kubernetes_namespace.claw-mock.metadata[0].name
   }
   spec {
     pod_selector {}

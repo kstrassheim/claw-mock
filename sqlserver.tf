@@ -108,7 +108,7 @@ resource "azurerm_mssql_firewall_rule" "allow_azure_services" {
 resource "kubernetes_secret" "claw_mock_db" {
   metadata {
     name      = "claw-mock-db"
-    namespace = var.namespace
+    namespace = kubernetes_namespace.claw-mock.metadata[0].name
   }
   data = {
     SQL_SERVER_FQDN       = azurerm_mssql_server.sql.fully_qualified_domain_name
