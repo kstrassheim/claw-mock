@@ -469,7 +469,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          for key in OPENCLAW_UPSTREAM KUBECTL_VERSION SQLCMD_VERSION; do
+          for key in OPENCLAW_UPSTREAM KUBECTL_VERSION SQLCMD_VERSION MERMAID_CLI_VERSION; do
             echo "${key}=$(grep "^${key}=" VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
           done
           # GHCR tags drop the leading 'v' (ghcr.io/openclaw/openclaw:2026.7.1,
@@ -494,6 +494,7 @@ jobs:
             BASE_IMAGE=ghcr.io/openclaw/openclaw:${{ steps.version.outputs.GHCR_TAG }}
             KUBECTL_VERSION=${{ steps.version.outputs.KUBECTL_VERSION }}
             SQLCMD_VERSION=${{ steps.version.outputs.SQLCMD_VERSION }}
+            MERMAID_CLI_VERSION=${{ steps.version.outputs.MERMAID_CLI_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

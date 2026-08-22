@@ -87,6 +87,85 @@ data:
     tail -n 80 $HOME/.openclaw/mock-logs/$(ls -1t $HOME/.openclaw/mock-logs/ | head -1)
     ```
 
+    ### diagram / chart
+
+    Draw the schema of a mock database, or any chart you have mermaid
+    source for.
+
+    ```bash
+    # the mermaid source itself
+    mock-erd AdventureWorks
+
+    # rendered, and post the file — this is what chat needs
+    mock-erd AdventureWorks | mermaid-render                 # PNG
+    mock-erd Northwind      | mermaid-render --format svg    # SVG
+    ```
+
+    `mock-erd` reads INFORMATION_SCHEMA only — table names, columns,
+    types and the foreign keys between them. **No row data leaves the
+    database through it**, which is what makes the output safe to post
+    in chat.
+
+    `mermaid-render` prints the path of the file it wrote; attach that
+    path as media rather than pasting the source. Ask for `mermaid`
+    only when the destination renders it — a code forge does, this chat
+    does not, and a mermaid block here arrives as a code fence that
+    reads as the answer having failed.
+
+    ### chart-format status / png / svg / mermaid
+
+    Three output modes, one default. The mode is a SETTING on the bot,
+    not a per-call flag, so it is answered once rather than argued about
+    every time somebody asks for a diagram.
+
+    | mode | what goes out | when it is right |
+    |---|---|---|
+    | `png` | a rendered image | **the default.** Every chat channel displays it inline |
+    | `svg` | a rendered vector image | the destination scales it, or the table names must stay sharp on a big schema |
+    | `mermaid` | the mermaid source itself | the destination draws mermaid — a code forge does, in issues and pull requests |
+
+    The switch is a flag file whose CONTENTS are the mode; absent means
+    `png`.
+
+    **status**
+
+    ```bash
+    cat $HOME/.openclaw/.chart-format 2>/dev/null || echo "chart format: png (default)"
+    ```
+
+    **set** — `png`, `svg` or `mermaid`:
+
+    ```bash
+    echo svg > $HOME/.openclaw/.chart-format
+    ```
+
+    **back to the default**
+
+    ```bash
+    rm -f $HOME/.openclaw/.chart-format
+    ```
+
+    **Honour it whenever a diagram is asked for:**
+
+    ```bash
+    FMT=$(cat $HOME/.openclaw/.chart-format 2>/dev/null || echo png)
+    if [ "$FMT" = mermaid ]; then
+      mock-erd AdventureWorks                  # post the block itself
+    else
+      IMG=$(mock-erd AdventureWorks | mermaid-render --format "$FMT")
+    fi
+    ```
+
+    **`mermaid` means post the source, not a failed picture.** In that
+    mode do not call the renderer at all — send the fenced block and let
+    the destination draw it. In `png` or `svg`, attach the path
+    `mermaid-render` printed as media; do not paste the source as well.
+
+    A per-call override is still fine when somebody asks for one
+    explicitly ("send it as svg"), but it does NOT change the setting.
+    Changing the default is the `chart-format` command above, and only
+    when asked.
+
     ## Reporting style
 
     Keep replies terse. One line per piece of state. Example status:

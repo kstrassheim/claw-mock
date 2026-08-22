@@ -89,6 +89,62 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Chart rendering — chromium, mermaid-cli, and the two scripts that use them.
+#
+# The chat channel does not draw mermaid: a mermaid block arrives there as a
+# code fence, which reads as the answer having failed. So charts are rendered
+# to PNG or SVG for chat, while the mermaid SOURCE stays the right thing to
+# paste anywhere that renders it. All three formats, one script.
+#
+# CHROMIUM IS NOT IN THE BASE IMAGE. mermaid renders in a headless browser, so
+# it has to be installed here along with the libraries it dlopens and a font —
+# without fonts-liberation the render silently degrades to boxes, which looks
+# like a broken diagram rather than a missing package.
+#
+# NO SECOND BROWSER. puppeteer downloads its own Chromium by default, a second
+# ~150MB copy of what is installed right here. PUPPETEER_SKIP_DOWNLOAD stops
+# that and PUPPETEER_EXECUTABLE_PATH points it at the system binary. Both are
+# ENV rather than install-time only: mmdc reads them at RUN time in the pod
+# too, and an install-only value would work in the build and fail in service.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      chromium fonts-liberation \
+      libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+      libgbm1 libasound2 libxshmfence1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && chromium --version
+
+ENV PUPPETEER_SKIP_DOWNLOAD=1 \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Chromium refuses to run as root with its sandbox on, and a container has no
+# user namespace to sandbox into. --disable-dev-shm-usage as well: the default
+# /dev/shm is 64MB and chromium crashes rendering anything large, which looks
+# like a broken diagram rather than a full tmpfs.
+RUN printf '%s\n' \
+      '{"args":["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"]}' \
+      > /etc/puppeteer-no-sandbox.json \
+ && chmod 0644 /etc/puppeteer-no-sandbox.json
+
+ARG MERMAID_CLI_VERSION
+RUN npm install -g --no-audit --no-fund --loglevel=error \
+      "@mermaid-js/mermaid-cli@${MERMAID_CLI_VERSION}" \
+ && command -v mmdc \
+ # Render for real, with the same arguments mermaid-render uses. Checking that
+ # the binary unpacked proves nothing — this fails at RENDER time, on the
+ # sandbox, with the package installed perfectly. A writable HOME is not
+ # optional either: chromium spawns chrome_crashpad_handler before anything
+ # else and derives its database from the home directory.
+ && mkdir -p /tmp/smoke-home \
+ && printf 'graph TD\n  A[build] --> B[check]\n' > /tmp/smoke.mmd \
+ && HOME=/tmp/smoke-home XDG_CONFIG_HOME=/tmp/smoke-home/.config \
+    XDG_CACHE_HOME=/tmp/smoke-home/.cache \
+    mmdc -p /etc/puppeteer-no-sandbox.json \
+         -i /tmp/smoke.mmd -o /tmp/smoke.png \
+ && test -s /tmp/smoke.png \
+ && rm -rf /tmp/smoke-home /tmp/smoke.mmd /tmp/smoke.png
+
 # db-mocker scripts:
 #   cron-mock-spawn  — runs in the db-mocker CronJob pod; finds the main
 #                      claw-mock pod and backgrounds mock-runner there
@@ -102,8 +158,11 @@ RUN apt-get update \
 # "/builder/mock-prompt.md: not found".
 COPY cron-mock-spawn.sh /usr/local/bin/cron-mock-spawn
 COPY mock-runner.sh     /usr/local/bin/mock-runner
+COPY mermaid-render     /usr/local/bin/mermaid-render
+COPY mock-erd           /usr/local/bin/mock-erd
 COPY mock-prompt.md     /usr/local/share/claw-mock/mock-prompt.md
 RUN chmod 0755 /usr/local/bin/cron-mock-spawn /usr/local/bin/mock-runner \
+               /usr/local/bin/mermaid-render /usr/local/bin/mock-erd \
  && chown -R 1000:1000 /usr/local/share/claw-mock
 
 # Issue #15 — bot logs and messages must carry Zürich local time
