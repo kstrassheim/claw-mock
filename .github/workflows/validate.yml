@@ -34,16 +34,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Read TERRAFORM_VERSION from /VERSIONS
+      - name: Read TOFU_VERSION from /VERSIONS
         id: tfver
         run: |
-          echo "version=$(grep '^TERRAFORM_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "version=$(grep '^TOFU_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: ${{ steps.tfver.outputs.version }}
-          terraform_wrapper: true
+          tofu_version: ${{ steps.tfver.outputs.version }}
+          tofu_wrapper: true
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -65,7 +65,7 @@ jobs:
       - name: Get AKS credentials for kubernetes/helm providers
         # On a fresh environment the cluster does not exist yet — fall
         # back to a placeholder kubeconfig so the kubernetes/helm
-        # providers can still load during `terraform plan` (plan makes
+        # providers can still load during `tofu plan` (plan makes
         # no K8s API calls for the resources in this config).
         run: |
           if az aks show --resource-group claw-mock-dev --name claw-mock-aks -o none 2>/dev/null; then
@@ -102,18 +102,17 @@ jobs:
 
       - name: Terraform Init
         run: |
-          terraform init \
+          tofu init \
             -backend-config="resource_group_name=terraform" \
             -backend-config="storage_account_name=mytofustates" \
-            -backend-config="container_name=claw-mock" \
             -backend-config="key=dev.tfstate" \
             -backend-config="use_azuread_auth=true"
 
       - name: Terraform Validate
-        run: terraform validate
+        run: tofu validate
 
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
+        run: tofu plan -out=tfplan
 
       - name: Upload Terraform Plan artifact
         uses: actions/upload-artifact@v6
@@ -125,7 +124,7 @@ jobs:
       - name: Plan Summary
         run: |
           echo "## Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
-          terraform show --json tfplan 2>/dev/null | \
+          tofu show --json tfplan 2>/dev/null | \
             jq -r '[
               (.resources | length) as $total |
               "### Resources: \($total)",

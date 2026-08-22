@@ -1,3 +1,23 @@
+variable "app_name" {
+  description = <<-EOT
+    Canonical project name, and the single source of truth for three things
+    that must agree:
+
+      * the blob container in the mytofustates storage account holding this
+        project's state (backend.container_name),
+      * the RSA key in the kv-mytofustates Key Vault that wraps the state
+        encryption data key (encryption.key_provider.vault_key_name),
+      * the project name itself.
+
+    Referencing a variable from the backend block is OpenTofu-only (early
+    evaluation, resolved at `tofu init` before state exists) — HashiCorp
+    Terraform cannot parse it. That is already true of the encryption block
+    above it, so this adds no new constraint.
+  EOT
+  default     = "claw-mock"
+  type        = string
+}
+
 variable "env" {
   description = "Environment name"
   default     = "dev"

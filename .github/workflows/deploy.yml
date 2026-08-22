@@ -53,16 +53,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Read TERRAFORM_VERSION from /VERSIONS
+      - name: Read TOFU_VERSION from /VERSIONS
         id: tfver
         run: |
-          echo "version=$(grep '^TERRAFORM_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "version=$(grep '^TOFU_VERSION=' VERSIONS | cut -d= -f2)" >> $GITHUB_OUTPUT
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: ${{ steps.tfver.outputs.version }}
-          terraform_wrapper: true
+          tofu_version: ${{ steps.tfver.outputs.version }}
+          tofu_wrapper: true
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -97,21 +97,20 @@ jobs:
 
       - name: Terraform Init
         run: |
-          terraform init \
+          tofu init \
             -backend-config="resource_group_name=terraform" \
             -backend-config="storage_account_name=mytofustates" \
-            -backend-config="container_name=claw-mock" \
             -backend-config="key=dev.tfstate" \
             -backend-config="use_azuread_auth=true"
 
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
+        run: tofu plan -out=tfplan
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+        run: tofu apply -auto-approve tfplan
 
       - name: Upload Terraform Output
-        run: terraform output -json > terraform_output.json
+        run: tofu output -json > terraform_output.json
 
       - name: Upload Terraform Output artifact
         uses: actions/upload-artifact@v6
@@ -339,7 +338,7 @@ jobs:
           SQL_FQDN=$(jq -r '.sql_server_fqdn.value' /tmp/tfout/terraform_output.json)
           POD_IDENTITY=$(jq -r '.pod_identity_name.value' /tmp/tfout/terraform_output.json)
           if [ -z "$POD_IDENTITY" ] || [ "$POD_IDENTITY" = "null" ]; then
-            echo "::error::pod_identity_name missing from terraform output"
+            echo "::error::pod_identity_name missing from tofu output"
             exit 1
           fi
           sqlcmd --version
@@ -588,7 +587,7 @@ jobs:
           # the bot must not inherit either.
           CLIENT_ID=$(jq -r '.pod_identity_client_id.value' /tmp/tfout/terraform_output.json)
           if [ -z "$CLIENT_ID" ] || [ "$CLIENT_ID" = "null" ]; then
-            echo "::error::pod_identity_client_id missing from terraform output"
+            echo "::error::pod_identity_client_id missing from tofu output"
             exit 1
           fi
           kubectl -n claw-mock annotate serviceaccount claw-mock \
