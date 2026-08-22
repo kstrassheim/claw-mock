@@ -66,9 +66,20 @@ ORDER BY pt.name, ct.name;")"
 
 echo "erDiagram"
 
+# Entity names are ALWAYS quoted. SQL Server allows a space in a table name
+# and Northwind uses one — `Order Details` — which mermaid's erDiagram grammar
+# cannot parse bare: it fails the whole chart with
+#   Parse error: Expecting 'COLON', 'STYLE_SEPARATOR', got 'UNICODE_TEXT'
+# One such table makes the entire diagram unrenderable, so quoting is
+# unconditional rather than applied only to names that look like they need it.
+#
+# Column names cannot be quoted in this grammar — an attribute is `type name`
+# — so a space there would still break. None of the mock schemas has one, and
+# inventing a mangling for a case that does not exist would hide it if it
+# ever appeared.
 printf '%s\n' "$COLS" | awk -F'|' '
   NF < 3 { next }
-  $1 != last { if (last != "") print "  }"; print "  " $1 " {"; last = $1 }
+  $1 != last { if (last != "") print "  }"; printf "  \"%s\" {\n", $1; last = $1 }
   { print "    " $2 " " $3 }
   END { if (last != "") print "  }" }
 '
@@ -76,5 +87,5 @@ printf '%s\n' "$COLS" | awk -F'|' '
 printf '%s\n' "$FKS" | awk -F'|' '
   NF < 3 { next }
   # }o--|| : many on the child side, exactly one on the parent side.
-  { print "  " $1 " ||--o{ " $2 " : \"" $3 "\"" }
+  { printf "  \"%s\" ||--o{ \"%s\" : \"%s\"\n", $1, $2, $3 }
 '
