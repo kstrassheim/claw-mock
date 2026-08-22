@@ -180,3 +180,60 @@ which configure the backend and the azurerm provider — the key provider does n
 read `ARM_*` at all. The pipelines set both; if only one is set, that consumer
 falls back to the Azure CLI credential and fails with *"Please specify only one
 of subscription and tenant, not both"*.
+
+## Skills lockdown
+
+The bot has exactly one skill — `mocker`, defined in `k8s/050-db-mocker.yaml`
+and mounted from the `claw-mock-skill-mocker` ConfigMap. It must not be able to
+acquire another at runtime.
+
+That is not a small control. A skill is just instructions the agent will
+follow, so one it wrote for itself never went through a pull request and can
+tell it to do anything the sandbox physically permits — which makes it the
+shortest way around every other restriction here.
+
+Two halves, and neither is sufficient alone:
+
+**The image ships no bundled skill.** `builder/BUNDLED_SKILLS_ALLOWED` names
+what may survive the strip, and it is deliberately empty. The Dockerfile
+enumerates every loadable skill (`<...>/skills/<name>/SKILL.md`, including the
+ones inside extensions and in the `/app/dist` mirror — they are not all under
+`/app/skills`), removes what the list does not name, and then **asserts** that
+nothing unlisted survived. The assertion is the point: `rm -rf` on a path
+upstream has moved exits 0 and removes nothing, which is silent and total
+failure with a green build.
+
+**The skills directory is not the agent's.** `builder/lock-skill-dirs.sh` makes
+every directory openclaw can load a skill from root-owned and read-only. It
+runs in the init container **after** the recursive `chown -R 1000:1000` — a
+chown afterwards would hand the directories straight back while the manifest
+still read as locked. It fails closed: a missing binary refuses to start rather
+than coming up writable with nothing reporting it.
+
+### How it is checked
+
+| Check | Where | What it proves |
+|---|---|---|
+| `builder/verify-skills-locked.sh` | CI job **Skills Lockdown** | Static, over the repo: the allowlist is honoured, the assertion exists and can fail the build, no self-extension skill is re-enabled through the plugin allowlist, the mounted skills are exactly the ConfigMaps this repo defines in both directions, and the lockdown runs after the chown. |
+| `builder/verify-lockdown-effective.sh` | inside the built image, in **Docker Image Build** | Dynamic: runs the real lockdown against a scratch tree, then tries to defeat it as uid 1000. |
+| `builder/list-loadable-skills` | build assertion **and** the image re-check | One definition of "what counts as a loadable skill", so the two cannot drift apart. |
+
+The image build is gated on the static check — a green image next to a red
+lockdown would read as "the image is fine".
+
+The dynamic half also checks the two ways **over-locking** would break things:
+the agent must still be able to write `workspace/`, and root must still be able
+to mount a `SKILL.md` into a locked directory. Without that second one the pod
+comes up with **no skills at all**, which looks like the feature being broken
+rather than a permissions bug.
+
+### Changing the skills
+
+Add or change a skill in `k8s/` and mount it in `k8s/020-deployment.yaml`; the
+static check fails if a ConfigMap defines a skill nothing mounts, or if
+something is mounted without a matching ConfigMap. Keeping an upstream bundled
+skill means naming it in `BUNDLED_SKILLS_ALLOWED`, in a pull request that says
+what the bot needs it for.
+
+The lockdown runs in the init container, so it takes effect on the **next pod
+restart**, not on a ConfigMap update.

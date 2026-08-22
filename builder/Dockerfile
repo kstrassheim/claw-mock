@@ -14,12 +14,57 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-# Strip openclaw skills that expand the agent's capabilities at runtime:
-#   - mcporter      — dynamic MCP-server gateway (loads tools over HTTP/stdio,
-#                     bypasses our static MCP allowlist)
-#   - skill-creator — guides the agent to write new skill files
+# Strip every bundled openclaw skill the allowlist does not name.
+#
+# This used to remove two by name — mcporter (a dynamic MCP gateway that
+# bypasses the static MCP allowlist) and skill-creator (which teaches the
+# agent to write new skill files) — and keep everything else. That is the
+# wrong way round: an upstream release that adds a third ships it to the agent
+# silently, and nobody finds out until it is used. The list of what may
+# survive lives in BUNDLED_SKILLS_ALLOWED, and is currently empty: this bot's
+# only skill, `mocker`, arrives as a reviewed ConfigMap mount.
+#
+# THE ASSERTION IS THE POINT. `rm -rf` on a path upstream has moved exits 0
+# and removes nothing. That failure is silent and total — every bundled skill
+# ships and the build stays green. So after removing, this enumerates what is
+# actually loadable and fails the build on anything the allowlist does not
+# name. SKILLS-LOCKED-ASSERT is what CI greps for, so deleting this block is
+# itself a CI failure rather than a quiet loss of the control.
+#
+# SKILLS DO NOT ALL LIVE IN /app/skills. They also ship inside extensions at
+# /app/extensions/<ext>/skills/<name>/ and again in the built mirror under
+# /app/dist/. The old two-path `rm -rf` could not have removed those even if
+# it had named them. Removal and assertion are therefore driven by the SAME
+# find, so the two passes cannot disagree about what counts as a skill.
 USER root
-RUN rm -rf /app/skills/mcporter /app/skills/skill-creator
+COPY BUNDLED_SKILLS_ALLOWED /usr/local/share/BUNDLED_SKILLS_ALLOWED
+COPY --chmod=0755 list-loadable-skills.sh /usr/local/bin/list-loadable-skills
+COPY --chmod=0755 lock-skill-dirs.sh      /usr/local/bin/lock-skill-dirs
+RUN set -eu; \
+    sed 's/#.*//' /usr/local/share/BUNDLED_SKILLS_ALLOWED | awk 'NF' | sort -u > /tmp/allowed; \
+    find /app -name SKILL.md -not -path '*/node_modules/*' 2>/dev/null \
+      | grep '/skills/' \
+      | sed -E 's#(.*/skills/[^/]+)/.*#\1#' | sort -u > /tmp/roots || true; \
+    while IFS= read -r root; do \
+      [ -n "$root" ] || continue; \
+      [ -d "$root" ] || continue; \
+      name="$(basename "$root")"; \
+      if grep -qxF "$name" /tmp/allowed; then \
+        echo "keep   $name  ($root)"; \
+      else \
+        echo "strip  $name  ($root)"; \
+        rm -rf "$root"; \
+      fi; \
+    done < /tmp/roots; \
+    echo "SKILLS-LOCKED-ASSERT: verifying nothing unlisted survived"; \
+    /usr/local/bin/list-loadable-skills > /tmp/remaining; \
+    if [ -s /tmp/remaining ] && grep -vxF -f /tmp/allowed /tmp/remaining > /tmp/extra; then \
+      echo "FATAL: bundled skills survived the strip that the allowlist does not name:" >&2; \
+      cat /tmp/extra >&2; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/allowed /tmp/roots /tmp/remaining /tmp/extra; \
+    echo "SKILLS-LOCKED-ASSERT: ok"
 
 # kubectl — needed by the db-mocker CronJob (finds the main pod and
 # kubectl-execs the mock-runner into it) and by the `mocker` chat skill.
