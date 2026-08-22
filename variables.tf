@@ -119,3 +119,33 @@ variable "unique_suffix" {
   type        = string
   default     = "dev1"
 }
+
+variable "use_oidc" {
+  description = <<-EOT
+    Authenticate the azure_vault state-encryption key provider with a GitHub
+    OIDC token instead of the Azure CLI. Defaults to false so local runs use
+    your `az login` session; CI sets TF_VAR_use_oidc=true.
+
+    This has to be a block argument on the key provider. The provider does NOT
+    read ARM_USE_OIDC / ARM_USE_CLI / ARM_CLIENT_ID / ARM_TENANT_ID from the
+    environment the way the backend and the azurerm provider do -- setting
+    those has no effect on it, and it silently falls through to
+    AzureCLICredential, which then runs `az account get-access-token` with both
+    --subscription and --tenant and fails with:
+      ERROR: Please specify only one of subscription and tenant, not both
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "arm_client_id" {
+  description = "Client ID for the key provider when use_oidc is true. Empty locally; CI sets TF_VAR_arm_client_id."
+  type        = string
+  default     = ""
+}
+
+variable "arm_tenant_id" {
+  description = "Tenant ID for the key provider when use_oidc is true. Empty locally; CI sets TF_VAR_arm_tenant_id."
+  type        = string
+  default     = ""
+}

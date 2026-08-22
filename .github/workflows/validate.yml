@@ -98,16 +98,18 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_USE_AZUREAD_AUTH=true" >> $GITHUB_ENV
-          # Authenticate the azure_vault state-encryption key provider by GitHub
-          # OIDC rather than by the Azure CLI. ARM_USE_CLI defaults to true, so
-          # without this the credential chain falls through to AzureCLICredential,
-          # which runs `az account get-access-token` with both --subscription and
-          # --tenant set and dies with:
-          #   ERROR: Please specify only one of subscription and tenant, not both
-          # OpenTofu picks the OIDC request URL/token up from the runner's
-          # ACTIONS_ID_TOKEN_REQUEST_* vars automatically (permissions: id-token: write).
-          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
-          echo "ARM_USE_CLI=false" >> $GITHUB_ENV
+          # The azure_vault state-encryption key provider does NOT read ARM_USE_OIDC
+          # / ARM_USE_CLI / ARM_CLIENT_ID / ARM_TENANT_ID -- unlike the backend and
+          # the azurerm provider, it only takes these as block arguments. Left to
+          # itself it falls through to AzureCLICredential, which runs
+          # `az account get-access-token` with both --subscription and --tenant and
+          # fails: "Please specify only one of subscription and tenant, not both".
+          # These TF_VAR_* feed the key provider's use_oidc/client_id/tenant_id.
+          # The OIDC request URL and token are picked up automatically from the
+          # runner's ACTIONS_ID_TOKEN_REQUEST_* vars (permissions: id-token: write).
+          echo "TF_VAR_use_oidc=true" >> $GITHUB_ENV
+          echo "TF_VAR_arm_client_id=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "TF_VAR_arm_tenant_id=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
           echo "TF_VAR_env=dev" >> $GITHUB_ENV
 
       - name: OpenTofu Init

@@ -50,6 +50,11 @@ terraform {
       vault_uri      = "https://kv-mytofustates.vault.azure.net"
       vault_key_name = var.app_name
       key_length     = 32
+
+      use_oidc  = var.use_oidc
+      use_cli   = !var.use_oidc
+      client_id = var.arm_client_id
+      tenant_id = var.arm_tenant_id
     }
 
     method "aes_gcm" "state" {
