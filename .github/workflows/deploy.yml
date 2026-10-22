@@ -503,21 +503,24 @@ jobs:
 
       - name: Ensure openclaw-base is mirrored from GHCR into ACR
         # The Dockerfile's FROM points at our ACR, so the base must exist
-        # there before any build can resolve it.
+        # there before any build can resolve it. The bridge release rides
+        # along: the bridge-state initContainer pulls it from the same ACR.
         run: |
           set -euo pipefail
-          OPENCLAW_UPSTREAM=$(grep '^OPENCLAW_UPSTREAM=' VERSIONS | cut -d= -f2)
-          SRC_TAG="${OPENCLAW_UPSTREAM#v}"
-          if az acr repository show \
-               --name ${{ env.ACR_NAME }} \
-               --image "openclaw/openclaw-base:${OPENCLAW_UPSTREAM}" >/dev/null 2>&1; then
-            echo "openclaw/openclaw-base:${OPENCLAW_UPSTREAM} already present in ACR — skipping import"
-          else
-            az acr import \
-              --name ${{ env.ACR_NAME }} \
-              --source "ghcr.io/openclaw/openclaw:${SRC_TAG}" \
-              --image "openclaw/openclaw-base:${OPENCLAW_UPSTREAM}"
-          fi
+          for KEY in OPENCLAW_UPSTREAM OPENCLAW_BRIDGE; do
+            TAG=$(grep "^${KEY}=" VERSIONS | cut -d= -f2)
+            test -n "$TAG" || { echo "::error::no ${KEY} in /VERSIONS"; exit 1; }
+            if az acr repository show \
+                 --name ${{ env.ACR_NAME }} \
+                 --image "openclaw/openclaw-base:${TAG}" >/dev/null 2>&1; then
+              echo "openclaw/openclaw-base:${TAG} already present in ACR — skipping import"
+            else
+              az acr import \
+                --name ${{ env.ACR_NAME }} \
+                --source "ghcr.io/openclaw/openclaw:${TAG#v}" \
+                --image "openclaw/openclaw-base:${TAG}"
+            fi
+          done
 
       - name: Read version pins from /VERSIONS
         id: version
@@ -674,7 +677,14 @@ jobs:
         # `-f k8s/` is non-recursive: the markdown files under k8s/tools/
         # are skipped here (they're not YAML manifests). The next steps
         # assemble them into ConfigMaps via `kubectl create --from-file`.
-        run: kubectl apply -f k8s/
+        # The bridge-state image tag is the one pin the manifests take from
+        # /VERSIONS, mirrored by the build job as openclaw-base:<tag>.
+        run: |
+          set -euo pipefail
+          BRIDGE="$(grep '^OPENCLAW_BRIDGE=' VERSIONS | cut -d= -f2)"
+          [ -n "$BRIDGE" ] || { echo "::error::OPENCLAW_BRIDGE missing from VERSIONS"; exit 1; }
+          sed -i "s|PLACEHOLDER_BRIDGE_TAG|${BRIDGE}|g" k8s/*.yaml
+          kubectl apply -f k8s/
 
       - name: Point the claw-mock ServiceAccount at the deploy identity
         # Azure Workload Identity: the pod exchanges its projected SA

@@ -122,6 +122,75 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /home/node/.openclaw
+        # State from before July 2026 has to pass through the upstream bridge
+        # release (OPENCLAW_BRIDGE in /VERSIONS) before 2026.10.x opens it:
+        # 2026.10 refuses the retired plugin / workspace JSON state outright,
+        # and its doctor upgrades the SQLite schemas BEFORE refusing, after
+        # which the bridge can no longer open them — migrate-state then loops
+        # on the refusal for as long as anyone lets it.
+        #
+        # Keyed to the shared-state schema, not to a marker file: below what
+        # the bridge itself writes, the state predates it; at or above, there
+        # is nothing to bridge and this exits at once — every start after the
+        # first, and on a fresh PVC (no database at all).
+        #
+        # BEFORE render-config, deliberately: the bridge reads the config the
+        # old release wrote, and render-config then lays the current template
+        # over the migrated state.
+        - name: bridge-state
+          image: clwmockdevdev1.azurecr.io/openclaw/openclaw-base:PLACEHOLDER_BRIDGE_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              STATE_DB=/home/node/.openclaw/state/openclaw.sqlite
+              CFG=/home/node/.openclaw/openclaw.json
+              # The shared-state schema the bridge release writes (2026.9.5
+              # refuses anything newer than 17). Recheck when OPENCLAW_BRIDGE
+              # moves.
+              BRIDGE_SCHEMA=17
+              if [ ! -f "$STATE_DB" ] || [ ! -f "$CFG" ]; then
+                echo "no openclaw state on the PVC - nothing to bridge"
+                exit 0
+              fi
+              V=$(node -e '
+                const { DatabaseSync } = require("node:sqlite");
+                const db = new DatabaseSync(process.argv[1], { readOnly: true });
+                console.log(db.prepare("PRAGMA user_version").get().user_version);
+              ' "$STATE_DB")
+              if [ "$V" -ge "$BRIDGE_SCHEMA" ]; then
+                echo "shared state is at schema $V - already past the bridge"
+                exit 0
+              fi
+              echo "shared state is at schema $V (< $BRIDGE_SCHEMA) - bridging with $(node /app/openclaw.mjs --version)"
+              node /app/openclaw.mjs doctor --fix --non-interactive
+          envFrom:
+            - configMapRef:
+                name: claw-mock-config
+            - secretRef:
+                name: claw-mock-secrets
+            - secretRef:
+                name: claw-mock-db
+          volumeMounts:
+            - name: workspace
+              mountPath: /home/node/.openclaw
+            - name: tools-md
+              mountPath: /home/node/.openclaw/workspace/TOOLS.md
+              subPath: TOOLS.md
+            - name: mocking-manuals
+              mountPath: /home/node/.openclaw/workspace/MOCK
+            - name: skill-mocker
+              mountPath: /home/node/.openclaw/workspace/skills/mocker/SKILL.md
+              subPath: SKILL.md
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1500m
+              memory: 2Gi
         # Renders the openclaw.json from the template ConfigMap into the
         # PVC (fails fast if MINIMAX_API_KEY is missing — MiniMax is the
         # only provider) and mirrors it into the claw-mock-config
@@ -151,6 +220,42 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+        # Upstream releases can require a state-DB / session-store migration
+        # (v2026.10.x refuses to start with "state database schema migration
+        # required (audit-events-v2)" and exits 78), so run the safe,
+        # non-interactive doctor repairs on every start. A no-op when nothing
+        # is pending. After render-config, so it sees the config the gateway
+        # will run with; with the main container's env and mounts, because
+        # doctor persists enabled:false for any skill whose key it cannot see.
+        - name: migrate-state
+          image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
+          imagePullPolicy: Always
+          command: ["node", "/app/openclaw.mjs", "doctor", "--fix", "--non-interactive"]
+          envFrom:
+            - configMapRef:
+                name: claw-mock-config
+            - secretRef:
+                name: claw-mock-secrets
+            - secretRef:
+                name: claw-mock-db
+          volumeMounts:
+            - name: workspace
+              mountPath: /home/node/.openclaw
+            - name: tools-md
+              mountPath: /home/node/.openclaw/workspace/TOOLS.md
+              subPath: TOOLS.md
+            - name: mocking-manuals
+              mountPath: /home/node/.openclaw/workspace/MOCK
+            - name: skill-mocker
+              mountPath: /home/node/.openclaw/workspace/skills/mocker/SKILL.md
+              subPath: SKILL.md
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1500m
+              memory: 2Gi
       containers:
         - name: claw-mock
           image: clwmockdevdev1.azurecr.io/openclaw/claw-mock:latest
