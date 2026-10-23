@@ -26,7 +26,23 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
 echo "$BASHPID $(date -Iseconds)" > "$LOCK_DIR/owner"
-trap 'rm -rf "$LOCK_DIR"' EXIT
+
+# The turn gets a state directory of its own. openclaw 2026.10 refuses
+# `agent --local` while a Gateway runs on the same state directory:
+#
+#   A Gateway is running for this state directory (pid 7, port 18789). Run
+#   without --local to use it, or stop the Gateway first
+#
+# and the Gateway always runs in this pod, on ~/.openclaw — so every hourly
+# run would die before the model is called, with a healthy pod and a green
+# CronJob. Both Gateway locks live under the state directory, so a turn on
+# another OPENCLAW_STATE_DIR does not collide with it. The config and the
+# workspace (the MOCK-*.md manuals, TOOLS.md, the mocker skill) stay the
+# Gateway's own, named explicitly because both default to paths under the
+# state directory. One run is one session, so the directory goes with it.
+AGENT_STATE_DIR="${TMPDIR:-/tmp}/openclaw-agent-runs/$SESSION_ID"
+mkdir -p "$AGENT_STATE_DIR"
+trap 'rm -rf "$LOCK_DIR" "$AGENT_STATE_DIR"' EXIT
 
 # Where the run report goes. Each run uses its own --session-id, so it has no
 # channel binding of its own and bare --deliver fails with
@@ -62,6 +78,9 @@ fi
   else
     echo "[$(date -Iseconds)] no paired telegram owner found — report stays in this log"
   fi
+  OPENCLAW_STATE_DIR="$AGENT_STATE_DIR" \
+  OPENCLAW_CONFIG_PATH="$STATE_ROOT/openclaw.json" \
+  OPENCLAW_WORKSPACE_DIR="$STATE_ROOT/workspace" \
   timeout -k 60 "$TIMEOUT_SECONDS" openclaw agent \
     --local \
     --session-id "$SESSION_ID" \
