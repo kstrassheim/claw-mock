@@ -19,7 +19,7 @@ OPENCLAW_BRIDGE=v2026.9.5
 # and the db-mocker CronJob use against that exact server, and AKS publishes
 # no 1.36.4 -- a kubectl ahead of every available server is a skew nobody
 # chose. Bump the two together or not at all.
-KUBECTL_VERSION=1.37.1
+KUBECTL_VERSION=1.36.2
 SQLCMD_VERSION=1.10.0
 # mermaid-cli renders charts to PNG/SVG. Verified against npm, which is where
 # the Dockerfile installs it from -- the GitHub release tags differ.
