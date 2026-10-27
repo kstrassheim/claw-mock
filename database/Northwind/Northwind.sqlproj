@@ -18,7 +18,7 @@
   SDK: MSBuild.Sdk.SqlProj (cross-platform, builds on any dotnet SDK —
   this is what the CI dacpac-build job uses on ubuntu-latest).
 -->
-<Project Sdk="MSBuild.Sdk.SqlProj/4.4.0">
+<Project Sdk="MSBuild.Sdk.SqlProj/3.3.0">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <!-- SqlProj builds no ref assembly; without this the .NET SDK
