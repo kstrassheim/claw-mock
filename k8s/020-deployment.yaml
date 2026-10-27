@@ -56,6 +56,11 @@ spec:
   # while the old pod still holds it.
   strategy:
     type: Recreate
+  # A start takes 8-10 minutes since openclaw 2026.10: the state migration runs
+  # `doctor --fix` on every start, and doctor first captures the whole state for
+  # recovery before its checks. Kubernetes' default deadline is 600s, so a
+  # rollout was marked failed while the pod was still coming up fine.
+  progressDeadlineSeconds: 1800
   selector:
     matchLabels:
       app: claw-mock

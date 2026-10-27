@@ -169,7 +169,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Build AdventureWorks dacpac
         run: dotnet build database/AdventureWorks/AdventureWorks.sqlproj -c Release
@@ -183,8 +183,8 @@ jobs:
         # the two dacpacs at its root.
         run: |
           mkdir -p artifacts/dacpacs
-          cp database/AdventureWorks/bin/Release/net8.0/AdventureWorks.dacpac artifacts/dacpacs/
-          cp database/Northwind/bin/Release/net8.0/Northwind.dacpac artifacts/dacpacs/
+          cp database/AdventureWorks/bin/Release/net10.0/AdventureWorks.dacpac artifacts/dacpacs/
+          cp database/Northwind/bin/Release/net10.0/Northwind.dacpac artifacts/dacpacs/
 
       - name: Upload dacpac artifacts
         uses: actions/upload-artifact@v6
@@ -229,7 +229,7 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Download dacpac artifacts
         uses: actions/download-artifact@v7
