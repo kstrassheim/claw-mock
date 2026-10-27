@@ -4,7 +4,7 @@
 
 # Upstream openclaw base image (FROM in builder/Dockerfile).
 # Tag matches https://github.com/openclaw/openclaw releases.
-OPENCLAW_UPSTREAM=v2026.10.6
+OPENCLAW_UPSTREAM=v2026.10.7
 
 # The upstream bridge release the bridge-state initContainer runs. State written
 # before July 2026 (this project's v2026.7.1 era) must pass through this
@@ -23,6 +23,6 @@ KUBECTL_VERSION=1.36.2
 SQLCMD_VERSION=1.10.0
 # mermaid-cli renders charts to PNG/SVG. Verified against npm, which is where
 # the Dockerfile installs it from -- the GitHub release tags differ.
-MERMAID_CLI_VERSION=11.16.0
+MERMAID_CLI_VERSION=11.17.0
 # OpenTofu used by the CI pipelines (state is encrypted; Terraform cannot read it).
-TOFU_VERSION=1.12.6
+TOFU_VERSION=1.13.2
