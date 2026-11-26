@@ -73,7 +73,7 @@ to any workload.
   | Secret | Used for |
   | --- | --- |
   | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | OIDC login as the deploy identity |
-  | `MINIMAX_API_KEY` | the bot's only model (MiniMax M3) |
+  | `MINIMAX_API_KEY` | the bot's only model provider (MiniMax M3.1 Flash, M3 as fallback) |
   | `TELEGRAM_BOT_TOKEN` | Telegram channel |
 
   The gateway auth token is **not** a secret here — `apply-secrets` mints one on

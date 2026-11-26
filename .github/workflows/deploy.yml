@@ -433,7 +433,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${MINIMAX_API_KEY:-}" ]; then
-            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax M3 only."
+            echo "::error::MINIMAX_API_KEY is not set in the 'dev' environment. claw-mock runs on MiniMax only (M3.1 Flash, M3 as fallback)."
             exit 1
           fi
 
