@@ -9,7 +9,7 @@ names or pretending you can act.
 
 The container image (built from `builder/Dockerfile`) ships:
 
-- **openclaw** (base image) with **MiniMax M3** as the only model
+- **openclaw** (base image) with **MiniMax M3.1 Flash** as the model (MiniMax M3 as fallback; MiniMax is the only provider)
   provider. No Mistral, no Moonshot — MINIMAX_API_KEY is mandatory.
 - **`sqlcmd`** (go-sqlcmd) — the tool you use for every database
   interaction. See the "Database access" section below.
